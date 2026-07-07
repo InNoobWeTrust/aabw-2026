@@ -1,0 +1,17 @@
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+auth.json
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+*.log
+dist/
+build/
+.idea/
+.vscode/
