@@ -3,9 +3,11 @@
 **July 2026** | Executive decision document for the build challenge
 
 **Companion documents:**
+- `docs/mvp-pipeline.md` — MVP pipeline with hosted APIs (hackathon build plan) ← **START HERE for hackathon**
+- `docs/quality-evaluation-strategy.md` — quality evaluation gates (automated + LLM + human review)
+- `docs/regeneration-pipeline.md` — full regeneration-first architecture (production vision)
 - `docs/current-scene.md` — data needs, competitive landscape, regulatory backdrop
 - `docs/capture-tech.md` — consumer device sensor capabilities & robotics-readiness
-- `docs/regeneration-pipeline.md` — regeneration-first architecture (recommended MVP)
 - `docs/problem_statement/Physical World Data Layer.md` — original problem statement
 
 ---
@@ -43,6 +45,8 @@ A contributor records a 30s phone video of a task. The platform runs a regenerat
 | Dataset value | Single-embodiment | **Cross-embodiment** |
 
 **Pipeline:** Phone video → HybrIK-X skeleton → COLMAP/3DGS scene → pinocchio IK retarget → LeRobot dataset
+
+**Hackathon MVP:** Phone video → YOLO26-pose (Replicate) → 2D→3D lifting (local) → pinocchio IK → LeRobot dataset. See `docs/mvp-pipeline.md`.
 
 **Status:** 5 of 7 pipeline stages are production-ready with MIT/Apache 2.0 tools today. See `docs/regeneration-pipeline.md` for full architecture.
 
@@ -102,4 +106,5 @@ A contributor records a 30s phone video of a task. The platform runs a regenerat
 1. Decide on regeneration pipeline as MVP scope
 2. Confirm Franka Panda as default robot target + pouring as reference task
 3. Validate end-to-end proof-of-concept: phone video → HybrIK-X → pinocchio → LeRobot → ACT fine-tune in sim
-4. Move to product spec / requirements
+4. Implement quality evaluation gates (automated metrics + LLM visual assessment)
+5. Move to product spec / requirements

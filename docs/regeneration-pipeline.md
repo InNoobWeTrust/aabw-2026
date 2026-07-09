@@ -22,26 +22,15 @@
 
 ## Pipeline Overview
 
-```
-Phone video ──┬── [Step 1] Human Mesh Recovery ──────── ✅ SOLVED
-              │     HybrIK-X (MIT) + PHALP tracking
-              │     → SMPL-X skeleton [T × 55 × 3]
-              │
-              ├── [Step 2] Scene Reconstruction ──────── ✅ SOLVED (visual)
-              │     COLMAP + 3DGS / Nerfacto + Depth-Anything-V2
-              │     → Textured 3D mesh + camera poses
-              │
-              ├── [Step 3] Object State Extraction ───── ⚠️ PARTIAL
-              │     FoundationPose (NVIDIA) + SAM2
-              │     → Per-object 6-DoF pose [T × N × 7]
-              │
-              ├── [Step 4] Skeleton → Robot Retargeting ─ ✅ SOLVED
-              │     pinocchio IK + robot URDF
-              │     → Robot joint trajectory [T × J]
-              │
-              └── [Step 5] Render + Package ───────────── ✅ SOLVED
-                    NVIDIA Kaolin + LeRobot
-                    → LeRobot dataset (Parquet + MP4)
+```mermaid
+graph TD
+    V[Phone Video] --> S1["Step 1: Human Mesh Recovery ✅<br/>HybrIK-X + PHALP<br/>→ SMPL-X skeleton [T×55×3]"]
+    V --> S2["Step 2: Scene Reconstruction ✅<br/>COLMAP + 3DGS + Depth-Anything-V2<br/>→ Textured 3D mesh + camera poses"]
+    S1 --> S4["Step 4: Robot Retargeting ✅<br/>pinocchio IK + URDF<br/>→ Robot joint trajectory [T×J]"]
+    S2 --> S3["Step 3: Object State Extraction ⚠️<br/>FoundationPose + SAM2<br/>→ Per-object 6-DoF pose [T×N×7]"]
+    S2 --> S5["Step 5: Render + Package ✅<br/>Kaolin + LeRobot<br/>→ LeRobot dataset (Parquet + MP4)"]
+    S3 --> S5
+    S4 --> S5
 ```
 
 ## Pipeline Status
