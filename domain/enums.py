@@ -131,12 +131,43 @@ class ReviewStatus(str, enum.Enum):
         return self in (ReviewStatus.COMPLETED, ReviewStatus.FAILED)
 
 
+class CalibrationStatus(str, enum.Enum):
+    """Lifecycle state for an asynchronous mapping calibration sub-job."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+    def is_terminal(self) -> bool:
+        """Return True if the calibration no longer produces new events."""
+        return self in (CalibrationStatus.COMPLETED, CalibrationStatus.FAILED)
+
+
 class ReviewVerdict(str, enum.Enum):
     """Stage-level usability verdict emitted by review agents."""
 
     APPROVED = "approved"
     USABLE_SKELETON_ONLY = "usable_skeleton_only"
     NEEDS_REVIEW = "needs_review"
+    REJECTED = "rejected"
+
+
+class CalibrationDecision(str, enum.Enum):
+    """Decision label emitted by the mapping calibrator."""
+
+    BASELINE_OK = "baseline_ok"
+    RERUN_WITH_PROFILE = "rerun_with_profile"
+    SKELETON_ONLY = "skeleton_only"
+    REJECT = "reject"
+
+
+class CalibrationVerdict(str, enum.Enum):
+    """High-level usability verdict emitted by the mapping calibrator."""
+
+    BASELINE_ACCEPTABLE = "baseline_acceptable"
+    ROBOT_MAPPING_SALVAGEABLE = "robot_mapping_salvageable"
+    SKELETON_ONLY = "skeleton_only"
     REJECTED = "rejected"
 
 

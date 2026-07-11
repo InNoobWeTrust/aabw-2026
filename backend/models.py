@@ -11,6 +11,9 @@ from pydantic import BaseModel, Field
 from domain.enums import (
     AssistantMessageRole,
     AssistantSessionStatus,
+    CalibrationDecision,
+    CalibrationStatus,
+    CalibrationVerdict,
     JobStatus,
     PipelineStage,
     ReviewStage,
@@ -104,6 +107,24 @@ class ReviewListResponse(BaseModel):
     """Container for both stage reviews attached to one job."""
 
     reviews: list[ReviewSnapshotResponse]
+
+
+class CalibrationSnapshotResponse(BaseModel):
+    """Public-facing mapping calibration snapshot returned to the client."""
+
+    job_id: str
+    status: CalibrationStatus
+    provider: str
+    sandbox: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    decision: CalibrationDecision | None = None
+    verdict: CalibrationVerdict | None = None
+    summary: str | None = None
+    json_path: str | None = None
+    error: str | None = None
+    context_manifest: dict = Field(default_factory=dict)
+    metadata: dict = Field(default_factory=dict)
 
 
 class ArtifactManifestResponse(BaseModel):

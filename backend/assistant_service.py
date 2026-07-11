@@ -5,8 +5,9 @@ The assistant is intentionally separate from the single-shot review pipeline:
 - this assistant helps a human reviewer investigate artifacts interactively
 
 The loop is bounded by max turns and a small whitelist of local read-only tools.
-When external credentials are available, the loop uses Featherless via Daytona
-for each reasoning turn. Otherwise it falls back to a deterministic local helper.
+When external credentials are available, the loop uses a generic OpenAI-compatible
+provider directly from local Python. Otherwise it falls back to a deterministic
+local helper.
 """
 
 from __future__ import annotations
@@ -189,7 +190,7 @@ class ReviewAssistantService:
         transcript: list[AssistantMessage],
     ) -> dict[str, Any]:
         """Choose either a tool call or a final answer for the next loop turn."""
-        if settings.review_execution_mode == "featherless_daytona":
+        if settings.review_execution_mode == "openai_compatible":
             return await self._external_action(job_id, session_id, transcript)
         return self._local_action(job_id, session_id, transcript)
 
@@ -224,14 +225,12 @@ class ReviewAssistantService:
         session_id: str,
         transcript: list[AssistantMessage],
     ) -> dict[str, Any]:
-        """Use Featherless via Daytona to choose the next action in the loop."""
+        """Use a direct OpenAI-compatible provider call to choose the next action."""
         prompt = self._build_assistant_prompt(job_id, transcript)
-        sandbox_id = await self._create_daytona_sandbox()
-        try:
-            code = _build_daytona_assistant_program(prompt)
-            return await self._run_daytona_code(sandbox_id, code)
-        finally:
-            await self._delete_daytona_sandbox(sandbox_id)
+        return await _call_openai_compatible_json(
+            system_message="You are a robotics review assistant. Return strict JSON only.",
+            prompt=prompt,
+        )
 
     def _build_assistant_prompt(self, job_id: str, transcript: list[AssistantMessage]) -> str:
         """Build a bounded prompt describing tools and recent transcript context."""
@@ -339,50 +338,6 @@ class ReviewAssistantService:
             "payload": payload,
         }
 
-    async def _create_daytona_sandbox(self) -> str:
-        headers = {
-            "Authorization": f"Bearer {settings.daytona_api_key}",
-            "Content-Type": "application/json",
-        }
-        body: dict[str, Any] = {}
-        if settings.daytona_project_id:
-            body["projectId"] = settings.daytona_project_id
-        async with httpx.AsyncClient(timeout=settings.review_timeout_seconds) as client:
-            response = await client.post(
-                f"{settings.daytona_base_url}/api/sandbox",
-                headers=headers,
-                json=body,
-            )
-            response.raise_for_status()
-            data = response.json()
-        sandbox_id = data.get("id") or data.get("sandboxId")
-        if not sandbox_id:
-            raise RuntimeError("Daytona sandbox creation returned no sandbox id")
-        return str(sandbox_id)
-
-    async def _run_daytona_code(self, sandbox_id: str, code: str) -> dict[str, Any]:
-        headers = {"Content-Type": "application/json"}
-        url = f"{settings.daytona_proxy_base_url}/toolbox/{sandbox_id}/process/code-run"
-        async with httpx.AsyncClient(timeout=settings.review_timeout_seconds) as client:
-            response = await client.post(url, headers=headers, json={"code": code})
-            response.raise_for_status()
-            data = response.json()
-        result_text = data.get("result", "")
-        if not result_text:
-            raise RuntimeError("Daytona code run returned no result payload")
-        return json.loads(result_text)
-
-    async def _delete_daytona_sandbox(self, sandbox_id: str) -> None:
-        headers = {"Authorization": f"Bearer {settings.daytona_api_key}"}
-        async with httpx.AsyncClient(timeout=settings.review_timeout_seconds) as client:
-            try:
-                await client.delete(
-                    f"{settings.daytona_base_url}/api/sandbox/{sandbox_id}",
-                    headers=headers,
-                )
-            except Exception:  # pragma: no cover
-                _logger.warning("Failed to delete Daytona sandbox %s", sandbox_id)
-
     def _stream_assistant_message(self, job_id: str, session_id: str, content: str) -> None:
         self._emit(job_id, session_id, "section", {"name": "assistant"})
         for chunk in _chunk_text(content, settings.review_stream_chunk_chars):
@@ -427,51 +382,39 @@ def _chunk_text(text: str, width: int) -> list[str]:
     return [text[i : i + width] for i in range(0, len(text), width)] or [""]
 
 
-def _build_daytona_assistant_program(prompt: str) -> str:
-    prompt_json = json.dumps(prompt)
-    model_json = json.dumps(settings.review_model_name)
-    api_key_json = json.dumps(settings.featherless_api_key)
-    base_url_json = json.dumps(settings.featherless_base_url.rstrip("/"))
-    timeout_json = json.dumps(settings.review_timeout_seconds)
-    system_message_json = json.dumps(
-        "You are a robotics review assistant. Return strict JSON only."
-    )
+async def _call_openai_compatible_json(
+    *,
+    system_message: str,
+    prompt: str,
+) -> dict[str, Any]:
+    """Call an OpenAI-compatible chat-completions endpoint and parse strict JSON."""
+    api_key = settings.effective_llm_api_key
+    if not api_key:
+        raise RuntimeError("llm_provider_not_configured")
 
-    return f"""
-import json
-import urllib.request
+    body = {
+        "model": settings.review_model_name,
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    async with httpx.AsyncClient(timeout=settings.review_timeout_seconds) as client:
+        response = await client.post(
+            f"{settings.effective_llm_base_url}/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        response.raise_for_status()
+        raw = response.json()
 
-PROMPT = {prompt_json}
-MODEL = {model_json}
-API_KEY = {api_key_json}
-BASE_URL = {base_url_json}
-TIMEOUT = {timeout_json}
-SYSTEM_MESSAGE = {system_message_json}
-
-body = json.dumps({{
-    "model": MODEL,
-    "messages": [
-        {{"role": "system", "content": SYSTEM_MESSAGE}},
-        {{"role": "user", "content": PROMPT}},
-    ],
-    "temperature": 0.2,
-    "response_format": {{"type": "json_object"}},
-}}).encode("utf-8")
-
-request = urllib.request.Request(
-    BASE_URL + "/v1/chat/completions",
-    data=body,
-    headers={{
-        "Authorization": f"Bearer {{API_KEY}}",
-        "Content-Type": "application/json",
-    }},
-    method="POST",
-)
-
-with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-    raw = json.loads(response.read().decode("utf-8"))
-
-message = raw["choices"][0]["message"]["content"]
-payload = json.loads(message)
-print(json.dumps(payload))
-"""
+    message = raw["choices"][0]["message"]["content"]
+    if isinstance(message, list):
+        text_parts = [part.get("text", "") for part in message if isinstance(part, dict)]
+        message = "".join(text_parts)
+    return json.loads(message)

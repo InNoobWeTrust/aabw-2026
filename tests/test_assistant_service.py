@@ -40,8 +40,8 @@ async def test_assistant_local_loop_uses_tool_then_final(tmp_path, monkeypatch):
         completed_at=datetime.now(timezone.utc),
     )
 
+    monkeypatch.setattr("backend.assistant_service.settings.llm_api_key", None)
     monkeypatch.setattr("backend.assistant_service.settings.featherless_api_key", None)
-    monkeypatch.setattr("backend.assistant_service.settings.daytona_api_key", None)
 
     session = service.create_session(snapshot.job_id, title="Assist")
     service.submit_user_message(snapshot.job_id, session.session_id, "Help me review this job")

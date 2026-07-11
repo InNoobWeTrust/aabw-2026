@@ -19,12 +19,26 @@ enum definitions and immediate tests.
 """
 
 from domain.auth import SessionIdentity
-from domain.enums import JobStatus, PipelineStage, QualityGrade, UserRole
+from domain.calibration import CalibrationEvent, CalibrationSnapshot
+from domain.enums import (
+    CalibrationDecision,
+    CalibrationStatus,
+    CalibrationVerdict,
+    JobStatus,
+    PipelineStage,
+    QualityGrade,
+    UserRole,
+)
 from domain.jobs import JobEvent, JobOwner, JobProgress, JobSnapshot
 from domain.mapping import AxisMapping, MappingProfile
 
 __all__ = [
     "AxisMapping",
+    "CalibrationDecision",
+    "CalibrationEvent",
+    "CalibrationSnapshot",
+    "CalibrationStatus",
+    "CalibrationVerdict",
     "JobEvent",
     "JobOwner",
     "JobProgress",

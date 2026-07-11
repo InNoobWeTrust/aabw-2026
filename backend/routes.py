@@ -259,7 +259,7 @@ def _schedule_pose_review(job_id: str) -> None:
         job_id=job_id,
         stage=ReviewStage.POSE,
         context_manifest=pose_context,
-        review_factory=build_pose_review_factory(
+        review_factory_builder=lambda _emit: build_pose_review_factory(
             metrics=pose_context["metrics"],
             artifact_manifest=pose_context["artifact_manifest"],
         ),
