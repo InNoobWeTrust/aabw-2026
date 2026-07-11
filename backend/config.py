@@ -40,6 +40,16 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    featherless_api_key: str | None = None
+    featherless_base_url: str = "https://api.featherless.ai"
+    featherless_model_name: str = "kimi-k2"
+    daytona_api_key: str | None = None
+    daytona_base_url: str = "https://app.daytona.io"
+    daytona_project_id: str | None = None
+    review_timeout_seconds: int = 60
+    review_max_context_chars: int = 24000
+    review_stream_chunk_chars: int = 240
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
@@ -74,6 +84,33 @@ class Settings(BaseSettings):
     def has_admin_password(self) -> bool:
         """Return True if an admin password is explicitly configured."""
         return self.admin_access_password is not None
+
+    @property
+    def review_execution_mode(self) -> str:
+        """Return provider execution mode for reviews.
+
+        Returns ``featherless_daytona`` only when both provider and sandbox
+        credentials are configured; otherwise returns ``local_fallback`` so the
+        hackathon app still produces deterministic review artifacts.
+        """
+        if self.featherless_api_key and self.daytona_api_key:
+            return "featherless_daytona"
+        return "local_fallback"
+
+    @property
+    def review_provider_name(self) -> str:
+        """Return the configured review provider label."""
+        return "featherless"
+
+    @property
+    def review_sandbox_name(self) -> str:
+        """Return the configured sandbox label."""
+        return "daytona"
+
+    @property
+    def review_model_name(self) -> str:
+        """Return the configured model name used for external reviews."""
+        return self.featherless_model_name
 
 
 settings: Settings = Settings()

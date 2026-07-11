@@ -932,6 +932,132 @@ body {
     border-top: 1px solid var(--border);
     display: flex;
     justify-content: flex-end;
+    align-items: center;
+    gap: 1rem;
+}
+
+.footer-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.info-block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.info-block-header h4 {
+    margin: 0 !important;
+}
+
+.review-badges {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.badge.status-pending {
+    background: rgba(255, 165, 2, 0.1);
+    color: var(--warning);
+}
+
+.badge.status-running {
+    background: rgba(0, 212, 170, 0.1);
+    color: var(--accent);
+}
+
+.badge.status-completed {
+    background: rgba(46, 213, 115, 0.1);
+    color: var(--success);
+}
+
+.badge.status-failed {
+    background: rgba(255, 71, 87, 0.15);
+    color: var(--error);
+}
+
+.badge.verdict-approved {
+    background: rgba(46, 213, 115, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(46, 213, 115, 0.3);
+}
+
+.badge.verdict-usable_skeleton_only {
+    background: rgba(56, 189, 248, 0.15);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.badge.verdict-needs_review {
+    background: rgba(255, 165, 2, 0.15);
+    color: var(--warning);
+    border: 1px solid rgba(255, 165, 2, 0.3);
+}
+
+.badge.verdict-rejected {
+    background: rgba(255, 71, 87, 0.15);
+    color: var(--error);
+    border: 1px solid rgba(255, 71, 87, 0.3);
+}
+
+/* Pulsating Live Indicator */
+.pulse-indicator {
+    width: 6px;
+    height: 6px;
+    background-color: var(--accent);
+    border-radius: 50%;
+    display: inline-block;
+    box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.7);
+    animation: pulse 1.2s infinite cubic-bezier(0.66, 0, 0, 1);
+    vertical-align: middle;
+    margin-left: 0.4rem;
+}
+
+@keyframes pulse {
+    to {
+        box-shadow: 0 0 0 8px rgba(0, 212, 170, 0);
+    }
+}
+
+/* Salvage Path Banner */
+.salvage-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    margin-right: auto;
+    max-width: 65%;
+}
+
+.salvage-icon {
+    font-size: 1.1rem;
+    animation: float 2.5s ease-in-out infinite;
+}
+
+.salvage-text {
+    font-size: 0.75rem;
+    color: #cbd5e1;
+    line-height: 1.3;
+}
+
+@keyframes float {
+    0% { transform: translateY(0px); }
+    50% { transform: translateY(-3px); }
+    100% { transform: translateY(0px); }
 }
 
 @media (max-width: 900px) {
@@ -940,6 +1066,17 @@ body {
     }
     .modal-container {
         max-height: 95vh;
+    }
+    .video-container {
+        grid-template-columns: 1fr;
+    }
+    .salvage-banner {
+        max-width: 100%;
+        margin-bottom: 0.5rem;
+    }
+    .modal-footer {
+        flex-direction: column;
+        align-items: flex-end;
     }
 }
 

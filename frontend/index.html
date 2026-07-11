@@ -106,7 +106,15 @@
                             <video id="detail-video-original" playsinline muted></video>
                         </div>
                         <div class="video-block">
-                            <h4>Robot Simulation (Pinocchio)</h4>
+                            <h4>Skeleton Overlay</h4>
+                            <video id="detail-video-skeleton-overlay" playsinline muted></video>
+                        </div>
+                        <div class="video-block">
+                            <h4>Skeleton Preview</h4>
+                            <video id="detail-video-skeleton-preview" playsinline muted></video>
+                        </div>
+                        <div class="video-block">
+                            <h4>Robot Simulation</h4>
                             <video id="detail-video-simulation" playsinline muted></video>
                         </div>
                     </div>
@@ -136,13 +144,36 @@
                         <ul id="detail-static-checks" class="checks-list"></ul>
                     </div>
                     <div class="info-block">
-                        <h4>AI Robotics Agent Review</h4>
-                        <div id="detail-ai-review" class="markdown-body"></div>
+                        <div class="info-block-header">
+                            <h4>Stage 1: Pose Review</h4>
+                            <div class="review-badges">
+                                <span id="detail-pose-review-status" class="badge">pending</span>
+                                <span id="detail-pose-review-verdict" class="badge"></span>
+                            </div>
+                        </div>
+                        <div id="detail-pose-review-body" class="markdown-body"></div>
+                    </div>
+                    <div class="info-block">
+                        <div class="info-block-header">
+                            <h4>Stage 2: Retarget Review</h4>
+                            <div class="review-badges">
+                                <span id="detail-retarget-review-status" class="badge">pending</span>
+                                <span id="detail-retarget-review-verdict" class="badge"></span>
+                            </div>
+                        </div>
+                        <div id="detail-retarget-review-body" class="markdown-body"></div>
                     </div>
                 </div>
             </div>
             <div class="modal-footer">
-                <button id="detail-download-btn" class="btn-primary">⬇ Download Dataset</button>
+                <div id="detail-salvage-path-banner" class="salvage-banner hidden">
+                    <span class="salvage-icon">💡</span>
+                    <span class="salvage-text">Skeleton salvage path available: Retargeting failed/rejected, but you can download the skeleton dataset.</span>
+                </div>
+                <div class="footer-actions">
+                    <button id="detail-download-skeleton-btn" class="btn-secondary hidden">⬇ Download Skeleton Dataset</button>
+                    <button id="detail-download-robot-btn" class="btn-primary hidden">⬇ Download Robot Dataset</button>
+                </div>
             </div>
         </div>
     </div>

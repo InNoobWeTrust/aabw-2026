@@ -92,12 +92,18 @@ async function verifyToken() {
 /* Download */
 /* ------------------------------------------------------------------ */
 
-async function downloadDataset(jobId, filename) {
+async function downloadArtifact(jobId, filename, artifactKey) {
     try {
         const token = getToken();
-        const res = await fetch(`/api/jobs/${jobId}/download`, {
+        let res = await fetch(`/api/jobs/${jobId}/downloads/${artifactKey}`, {
             headers: { "Authorization": `Bearer ${token}` },
         });
+        if (res.status === 404) {
+            console.warn("Artifact download endpoint not found, falling back to legacy single-zip download");
+            res = await fetch(`/api/jobs/${jobId}/download`, {
+                headers: { "Authorization": `Bearer ${token}` },
+            });
+        }
         if (!res.ok) {
             const data = await res.json().catch(() => null);
             throw new Error((data && data.detail) || "Download failed");
@@ -106,7 +112,8 @@ async function downloadDataset(jobId, filename) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `${filename.replace(/\.[^.]+$/, "")}_dataset.zip`;
+        const nameSuffix = artifactKey ? `_${artifactKey.replace("_zip", "")}` : "_dataset";
+        a.download = `${filename.replace(/\.[^.]+$/, "")}${nameSuffix}.zip`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -114,6 +121,10 @@ async function downloadDataset(jobId, filename) {
     } catch (err) {
         showToast(err.message || "Download failed", "error");
     }
+}
+
+async function downloadDataset(jobId, filename) {
+    return downloadArtifact(jobId, filename, "dataset_robot_zip");
 }
 
 /* ------------------------------------------------------------------ */
@@ -536,21 +547,11 @@ async function init() {
 
     document.getElementById("logout-btn").addEventListener("click", logout);
 
-    document.getElementById("detail-close-btn").addEventListener("click", () => {
-        document.getElementById("job-detail-modal").classList.add("hidden");
-        const originalVideo = document.getElementById("detail-video-original");
-        const simVideo = document.getElementById("detail-video-simulation");
-        originalVideo.pause();
-        simVideo.pause();
-    });
+    document.getElementById("detail-close-btn").addEventListener("click", closeDetailsModal);
 
     document.getElementById("job-detail-modal").addEventListener("click", (e) => {
         if (e.target.id === "job-detail-modal") {
-            document.getElementById("job-detail-modal").classList.add("hidden");
-            const originalVideo = document.getElementById("detail-video-original");
-            const simVideo = document.getElementById("detail-video-simulation");
-            originalVideo.pause();
-            simVideo.pause();
+            closeDetailsModal();
         }
     });
 
@@ -590,6 +591,36 @@ document.addEventListener("DOMContentLoaded", init);
 /* ------------------------------------------------------------------ */
 /* Detail Modal & Visualizations */
 /* ------------------------------------------------------------------ */
+
+let activeStreams = {
+    pose: null,
+    retarget: null
+};
+
+function closeActiveStreams() {
+    if (activeStreams.pose) {
+        activeStreams.pose.close();
+        activeStreams.pose = null;
+    }
+    if (activeStreams.retarget) {
+        activeStreams.retarget.close();
+        activeStreams.retarget = null;
+    }
+}
+
+function closeDetailsModal() {
+    document.getElementById("job-detail-modal").classList.add("hidden");
+    closeActiveStreams();
+    const originalVideo = document.getElementById("detail-video-original");
+    const overlayVideo = document.getElementById("detail-video-skeleton-overlay");
+    const previewVideo = document.getElementById("detail-video-skeleton-preview");
+    const simVideo = document.getElementById("detail-video-simulation");
+    
+    if (originalVideo) originalVideo.pause();
+    if (overlayVideo) overlayVideo.pause();
+    if (previewVideo) previewVideo.pause();
+    if (simVideo) simVideo.pause();
+}
 
 function parseMarkdown(md) {
     if (!md) return "";
@@ -770,46 +801,75 @@ function drawTrajectoryChart(trajectory) {
 
 function initVideoSync() {
     const originalVideo = document.getElementById("detail-video-original");
+    const overlayVideo = document.getElementById("detail-video-skeleton-overlay");
+    const previewVideo = document.getElementById("detail-video-skeleton-preview");
     const simVideo = document.getElementById("detail-video-simulation");
     const playBtn = document.getElementById("video-play-btn");
     const timeDisplay = document.getElementById("video-time-display");
 
+    const allVideos = [originalVideo, overlayVideo, previewVideo, simVideo];
+
     let isPlaying = false;
 
+    // Reset videos
+    allVideos.forEach(v => {
+        if (v) {
+            v.pause();
+            v.currentTime = 0;
+        }
+    });
     playBtn.textContent = "Play Sync";
-    originalVideo.pause();
-    simVideo.pause();
 
     playBtn.onclick = () => {
         if (isPlaying) {
-            originalVideo.pause();
-            simVideo.pause();
+            allVideos.forEach(v => {
+                if (v && v.src) v.pause();
+            });
             playBtn.textContent = "Play Sync";
             isPlaying = false;
         } else {
-            const diff = Math.abs(originalVideo.currentTime - simVideo.currentTime);
-            if (diff > 0.15) {
-                simVideo.currentTime = originalVideo.currentTime;
-            }
-            originalVideo.play().catch(() => {});
-            simVideo.play().catch(() => {});
+            const targetTime = originalVideo.currentTime;
+            allVideos.forEach(v => {
+                if (v && v.src) {
+                    const diff = Math.abs(v.currentTime - targetTime);
+                    if (diff > 0.15) {
+                        v.currentTime = targetTime;
+                    }
+                    v.play().catch(() => {});
+                }
+            });
             playBtn.textContent = "Pause Sync";
             isPlaying = true;
         }
     };
 
     originalVideo.onplay = () => {
-        if (simVideo.paused) simVideo.play().catch(() => {});
+        allVideos.forEach(v => {
+            if (v && v !== originalVideo && v.paused && v.src) {
+                v.play().catch(() => {});
+            }
+        });
         playBtn.textContent = "Pause Sync";
         isPlaying = true;
     };
+
     originalVideo.onpause = () => {
-        if (!simVideo.paused) simVideo.pause();
+        allVideos.forEach(v => {
+            if (v && v !== originalVideo && !v.paused) {
+                v.pause();
+            }
+        });
         playBtn.textContent = "Play Sync";
         isPlaying = false;
     };
+
     originalVideo.onseeked = () => {
-        simVideo.currentTime = originalVideo.currentTime;
+        const targetTime = originalVideo.currentTime;
+        allVideos.forEach(v => {
+            if (v && v !== originalVideo && v.src) {
+                v.currentTime = targetTime;
+            }
+        });
     };
 
     const updateTime = () => {
@@ -822,15 +882,158 @@ function initVideoSync() {
     originalVideo.onloadedmetadata = updateTime;
 }
 
+function updateReviewStatusBadge(stage, status) {
+    const el = document.getElementById(`detail-${stage}-review-status`);
+    if (!el) return;
+    el.textContent = status;
+    el.className = `badge status-${status}`;
+    
+    const blockHeader = el.closest(".info-block-header");
+    let pulse = blockHeader.querySelector(".pulse-indicator");
+    if (status === "running") {
+        if (!pulse) {
+            pulse = document.createElement("span");
+            pulse.className = "pulse-indicator";
+            blockHeader.appendChild(pulse);
+        }
+    } else if (pulse) {
+        pulse.remove();
+    }
+}
+
+function updateReviewVerdictBadge(stage, verdict) {
+    const el = document.getElementById(`detail-${stage}-review-verdict`);
+    if (!el) return;
+    if (verdict) {
+        el.textContent = verdict.replace(/_/g, " ");
+        el.className = `badge verdict-${verdict}`;
+        el.style.display = "inline-block";
+    } else {
+        el.textContent = "";
+        el.style.display = "none";
+    }
+}
+
+function updateSalvageBannerState() {
+    const poseBadge = document.getElementById("detail-pose-review-verdict");
+    const retargetBadge = document.getElementById("detail-retarget-review-verdict");
+    const banner = document.getElementById("detail-salvage-path-banner");
+    
+    if (!poseBadge || !retargetBadge || !banner) return;
+    
+    const poseVerdict = poseBadge.textContent.trim().toLowerCase().replace(/ /g, "_");
+    const retargetVerdict = retargetBadge.textContent.trim().toLowerCase().replace(/ /g, "_");
+    
+    const poseOk = (poseVerdict === "approved" || poseVerdict === "usable_skeleton_only");
+    const retargetFailed = (retargetVerdict === "rejected" || retargetVerdict === "needs_review");
+    
+    if (poseOk && retargetFailed) {
+        banner.classList.remove("hidden");
+    } else {
+        banner.classList.add("hidden");
+    }
+}
+
+function streamReview(jobId, stage) {
+    if (activeStreams[stage]) {
+        activeStreams[stage].close();
+    }
+
+    const token = getToken();
+    const source = new EventSource(`/api/jobs/${jobId}/reviews/${stage}/stream?token=${token}`);
+    activeStreams[stage] = source;
+
+    let markdownText = "";
+    const bodyEl = document.getElementById(`detail-${stage}-review-body`);
+
+    source.addEventListener("status", (e) => {
+        updateReviewStatusBadge(stage, e.data);
+    });
+
+    source.addEventListener("token", (e) => {
+        markdownText += e.data;
+        bodyEl.innerHTML = parseMarkdown(markdownText);
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+    });
+
+    source.addEventListener("result", (e) => {
+        try {
+            const res = JSON.parse(e.data);
+            updateReviewVerdictBadge(stage, res.verdict);
+            updateSalvageBannerState();
+        } catch {}
+    });
+
+    source.addEventListener("error", (e) => {
+        console.error(`SSE stream error on ${stage} review:`, e);
+        source.close();
+        updateReviewStatusBadge(stage, "failed");
+        bodyEl.innerHTML += `<p class="status-failed" style="margin-top: 0.5rem; padding: 0.4rem; border-radius: 4px;">Stream connection interrupted.</p>`;
+    });
+
+    source.addEventListener("done", (e) => {
+        source.close();
+        updateReviewStatusBadge(stage, "completed");
+    });
+}
+
+async function renderOrStreamReview(jobId, stage, reviewInfo) {
+    if (!reviewInfo) return;
+    
+    updateReviewStatusBadge(stage, reviewInfo.status);
+    updateReviewVerdictBadge(stage, reviewInfo.verdict);
+    updateSalvageBannerState();
+
+    const bodyEl = document.getElementById(`detail-${stage}-review-body`);
+    
+    if (reviewInfo.status === "completed") {
+        try {
+            const data = await apiCall("GET", `/api/jobs/${jobId}/reviews/${stage}`);
+            bodyEl.innerHTML = parseMarkdown(data.markdown || reviewInfo.summary || "");
+        } catch (err) {
+            bodyEl.innerHTML = parseMarkdown(reviewInfo.summary || "No review content found.");
+        }
+    } else if (reviewInfo.status === "running" || reviewInfo.status === "pending") {
+        bodyEl.innerHTML = "<p><em>Waiting for review to start...</em></p>";
+        streamReview(jobId, stage);
+    } else if (reviewInfo.status === "failed") {
+        bodyEl.innerHTML = `<p class="status-failed" style="padding: 0.5rem; border-radius: 4px;">Review Failed: ${reviewInfo.error || "Unknown error"}</p>`;
+    }
+}
+
 async function openJobDetails(jobId) {
     const modal = document.getElementById("job-detail-modal");
     const originalVideo = document.getElementById("detail-video-original");
+    const overlayVideo = document.getElementById("detail-video-skeleton-overlay");
+    const previewVideo = document.getElementById("detail-video-skeleton-preview");
     const simVideo = document.getElementById("detail-video-simulation");
 
+    // Close any prior streams
+    closeActiveStreams();
+
+    // Reset video blocks visibility and source
     originalVideo.src = "";
+    overlayVideo.src = "";
+    previewVideo.src = "";
     simVideo.src = "";
+
+    originalVideo.closest(".video-block").classList.remove("hidden");
+    overlayVideo.closest(".video-block").classList.remove("hidden");
+    previewVideo.closest(".video-block").classList.remove("hidden");
+    simVideo.closest(".video-block").classList.remove("hidden");
+
     originalVideo.load();
+    overlayVideo.load();
+    previewVideo.load();
     simVideo.load();
+
+    // Setup fallback error checkers in case the new overlay/preview visual endpoints return 404
+    overlayVideo.onerror = () => {
+        overlayVideo.closest(".video-block").classList.add("hidden");
+    };
+    previewVideo.onerror = () => {
+        previewVideo.closest(".video-block").classList.add("hidden");
+    };
 
     try {
         const job = await fetchJob(jobId);
@@ -845,7 +1048,26 @@ async function openJobDetails(jobId) {
         const token = getToken();
         originalVideo.src = `/api/jobs/${job.job_id}/video/original?token=${token}`;
 
+        // Reset reviews UI
+        document.getElementById("detail-pose-review-body").innerHTML = "";
+        document.getElementById("detail-retarget-review-body").innerHTML = "";
+        updateReviewStatusBadge("pose", "pending");
+        updateReviewStatusBadge("retarget", "pending");
+        updateReviewVerdictBadge("pose", null);
+        updateReviewVerdictBadge("retarget", null);
+        document.getElementById("detail-salvage-path-banner").classList.add("hidden");
+
+        // Try to fetch dual reviews
+        let reviews = null;
+        try {
+            reviews = await apiCall("GET", `/api/jobs/${job.job_id}/reviews`);
+        } catch (err) {
+            console.warn("Two-stage review API not found, falling back to legacy review");
+        }
+
         if (job.status === "completed" && job.result) {
+            overlayVideo.src = `/api/jobs/${job.job_id}/video/skeleton-overlay?token=${token}`;
+            previewVideo.src = `/api/jobs/${job.job_id}/video/skeleton-preview?token=${token}`;
             simVideo.src = `/api/jobs/${job.job_id}/video/simulation?token=${token}`;
 
             // Render static checks
@@ -870,29 +1092,65 @@ async function openJobDetails(jobId) {
                 checksList.innerHTML = `<li>No static checks run yet</li>`;
             }
 
-            // Render AI Review
-            const aiReviewEl = document.getElementById("detail-ai-review");
-            aiReviewEl.innerHTML = parseMarkdown(job.result.ai_review || "");
+            // Render Reviews
+            if (reviews) {
+                renderOrStreamReview(job.job_id, "pose", reviews.pose);
+                renderOrStreamReview(job.job_id, "retarget", reviews.retarget);
+            } else {
+                // Fallback to legacy single review
+                updateReviewStatusBadge("pose", "completed");
+                updateReviewVerdictBadge("pose", "approved");
+                document.getElementById("detail-pose-review-body").innerHTML = "<p>Pose extraction completed. (Standard local review fallback)</p>";
+
+                updateReviewStatusBadge("retarget", "completed");
+                const verdict = (job.result.static_checks && job.result.static_checks.status === "passed") ? "approved" : "needs_review";
+                updateReviewVerdictBadge("retarget", verdict);
+                document.getElementById("detail-retarget-review-body").innerHTML = parseMarkdown(job.result.ai_review || "");
+                updateSalvageBannerState();
+            }
 
             // Render Trajectory Chart
             setTimeout(() => {
                 drawTrajectoryChart(job.result.downsampled_trajectory || []);
             }, 100);
 
-            // Hook download button
-            document.getElementById("detail-download-btn").onclick = () => {
-                downloadDataset(job.job_id, job.filename);
+            // Hook download buttons
+            document.getElementById("detail-download-skeleton-btn").classList.remove("hidden");
+            document.getElementById("detail-download-skeleton-btn").onclick = () => {
+                downloadArtifact(job.job_id, job.filename, "dataset_skeleton_zip");
             };
-            document.getElementById("detail-download-btn").classList.remove("hidden");
+
+            const hasRobot = job.result && (job.result.downsampled_trajectory || job.result.robot_simulation_video);
+            const retargetVerdict = reviews && reviews.retarget ? reviews.retarget.verdict : null;
+            if (hasRobot && retargetVerdict !== "rejected") {
+                document.getElementById("detail-download-robot-btn").classList.remove("hidden");
+                document.getElementById("detail-download-robot-btn").onclick = () => {
+                    downloadArtifact(job.job_id, job.filename, "dataset_robot_zip");
+                };
+            } else {
+                document.getElementById("detail-download-robot-btn").classList.add("hidden");
+            }
         } else {
             document.getElementById("detail-static-checks").innerHTML = `<li>Job not completed</li>`;
-            if (job.status === "failed" && job.message) {
-                document.getElementById("detail-ai-review").innerHTML = `<p class="status-failed" style="padding: 0.5rem; border-radius: 4px;">Job Failed: ${job.message}</p>`;
+            
+            if (reviews) {
+                renderOrStreamReview(job.job_id, "pose", reviews.pose);
+                renderOrStreamReview(job.job_id, "retarget", reviews.retarget);
             } else {
-                document.getElementById("detail-ai-review").innerHTML = `<p>Review report is generated once job is completed.</p>`;
+                if (job.status === "failed") {
+                    updateReviewStatusBadge("pose", "failed");
+                    updateReviewStatusBadge("retarget", "failed");
+                    document.getElementById("detail-pose-review-body").innerHTML = `<p class="status-failed" style="padding: 0.5rem; border-radius: 4px;">Job Failed</p>`;
+                    document.getElementById("detail-retarget-review-body").innerHTML = `<p class="status-failed" style="padding: 0.5rem; border-radius: 4px;">Job Failed: ${job.message}</p>`;
+                } else {
+                    document.getElementById("detail-pose-review-body").innerHTML = `<p>Waiting for pipeline completion...</p>`;
+                    document.getElementById("detail-retarget-review-body").innerHTML = `<p>Waiting for pipeline completion...</p>`;
+                }
             }
+            
             document.getElementById("trajectory-chart").innerHTML = `<div class="jobs-empty">Chart is only available for completed jobs</div>`;
-            document.getElementById("detail-download-btn").classList.add("hidden");
+            document.getElementById("detail-download-skeleton-btn").classList.add("hidden");
+            document.getElementById("detail-download-robot-btn").classList.add("hidden");
         }
 
         initVideoSync();

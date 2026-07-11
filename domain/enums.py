@@ -104,3 +104,37 @@ class QualityGrade(str, enum.Enum):
     GREEN = "green"
     YELLOW = "yellow"
     RED = "red"
+
+
+class ReviewStage(str, enum.Enum):
+    """Bounded review stage attached to a completed pipeline job.
+
+    POSE reviews the extracted human skeleton outputs and decides whether the
+    pose-stage dataset is useful. RETARGET reviews the mapped robot-joint
+    artifacts and decides whether the robot dataset is usable.
+    """
+
+    POSE = "pose"
+    RETARGET = "retarget"
+
+
+class ReviewStatus(str, enum.Enum):
+    """Lifecycle state for an asynchronous review sub-job."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+    def is_terminal(self) -> bool:
+        """Return True if the review no longer produces new events."""
+        return self in (ReviewStatus.COMPLETED, ReviewStatus.FAILED)
+
+
+class ReviewVerdict(str, enum.Enum):
+    """Stage-level usability verdict emitted by review agents."""
+
+    APPROVED = "approved"
+    USABLE_SKELETON_ONLY = "usable_skeleton_only"
+    NEEDS_REVIEW = "needs_review"
+    REJECTED = "rejected"
