@@ -20,7 +20,7 @@
 ## API Stack
 
 | # | Stage | Tool | Provider | AABW Partner? | Cost/video | Notes |
-|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | 0 | Agent orchestration | Claude Sonnet / Gemini | AWS Bedrock / Google | Yes | ~$0.01–0.03 | One call per video |
 | 1 | Video preprocessing | ffmpeg | Local CPU | — | $0 | Extract frames; <1s |
 | 2a | 3D pose estimation (PRIMARY) | MediaPipe Pose | Google (on-device) | Yes (Google) | $0 | 33 3D landmarks directly; no 2D→3D lifting needed |
@@ -762,7 +762,7 @@ timestamp:          float32      (seconds)
 ### Per-Video Breakdown
 
 | Stage | Provider | Cost (USD) | Billed Unit | Free Tier? |
-|---|---|---|---|---|---|
+|---|---|---|---|---|
 | Orchestrator (Claude Sonnet) | AWS Bedrock | $0.01–0.03 | Per 1K tokens | $0 if free credits |
 | ffmpeg keyframe extraction | Local | $0.00 | — | — |
 | MediaPipe Pose (PRIMARY) | Google (on-device) | $0.00 | — | Apache 2.0 |
@@ -804,7 +804,7 @@ timestamp:          float32      (seconds)
 ### What's Truly Hosted (API-Only)
 
 | Capability | Hosted? | Provider | Production-Ready? |
-|---|---|---|---|---|
+|---|---|---|---|
 | 3D pose estimation | Yes (local) | Google MediaPipe Pose | Yes (Apache 2.0) |
 | 2D pose estimation | Yes | Replicate YOLO26-pose | Yes |
 | Object segmentation | Yes | Replicate SAM2 | Yes |
@@ -814,7 +814,7 @@ timestamp:          float32      (seconds)
 ### What Must Be Local (No Hosted Equivalent)
 
 | Capability | Local Tool | Why No API Exists |
-|---|---|---|---|
+|---|---|---|
 | 3D pose estimation | MediaPipe Pose (on-device) | Free, local; primary path — no API needed |
 | 2D→3D skeleton lifting (fallback) | ~50 lines Python | Only needed if YOLO fallback triggered |
 | Robot IK retargeting | pinocchio (BSD) | Per-robot URDF; no general cloud IK service exists |
@@ -886,7 +886,7 @@ timestamp:          float32      (seconds)
 ### Pipeline Limitations
 
 | Limitation | Reason | Mitigation |
-|---|---|---|---|
+|---|---|---|
 | MediaPipe 3D accuracy | ±5–10cm depth error, hip-relative coordinates | Sufficient for single-arm retargeting; use YOLO fallback for critical frames |
 | No scene reconstruction | No hosted COLMAP/3DGS API | Skip for MVP; see `regeneration-pipeline.md` for production plan |
 | No IK API | Robot-specific URDFs; no generic cloud IK service | Local pinocchio (BSD) |

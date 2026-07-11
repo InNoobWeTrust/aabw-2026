@@ -132,7 +132,7 @@ When choosing a clip, prefer one that satisfies the capture recipe above.
 ## Environment Variables
 
 | Variable | Description | Default |
-|---|---|---|---|
+|---|---|---|
 | `JUDGE_ACCESS_PASSWORD` | Shared password for judge login (anonymous session) | (required) |
 | `ADMIN_ACCESS_PASSWORD` | Password for admin login (global visibility) | (required) |
 | `ACCESS_PASSWORD` | Legacy fallback for judge password (deprecated) | (none) |

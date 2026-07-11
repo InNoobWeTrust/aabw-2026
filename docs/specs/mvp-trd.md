@@ -240,16 +240,16 @@ data/jobs/<job_id>/
 |---|---|---|
 | `job_id` | `str` | UUID hex, assigned at upload |
 | `status` | `JobStatus` | One of: `queued`, `running`, `completed`, `failed`, `cancelled` |
-| `stage` | `PipelineStage \| null` | Current stage if status is `running`; stage of failure if `failed` |
+| `stage` | `PipelineStage or null` | Current stage if status is `running`; stage of failure if `failed` |
 | `progress` | `float` | 0.0–1.0 |
 | `judge_session_id` | `str` | UUID of the judge who submitted this job |
 | `filename` | `str` | Original uploaded filename |
 | `message` | `str` | Human-readable status message |
 | `created_at` | `str` (ISO 8601) | Job creation timestamp |
-| `started_at` | `str \| null` | When worker picked up the job |
-| `completed_at` | `str \| null` | When job reached terminal state |
-| `result` | `dict \| null` | Summary of pipeline output (quality grade, output path, etc.) |
-| `error` | `str \| null` | Error message if status is `failed` |
+| `started_at` | `str or null` | When worker picked up the job |
+| `completed_at` | `str or null` | When job reached terminal state |
+| `result` | `dict or null` | Summary of pipeline output (quality grade, output path, etc.) |
+| `error` | `str or null` | Error message if status is `failed` |
 
 ### PR-3: `events.jsonl` Format
 
