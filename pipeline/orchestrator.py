@@ -9,6 +9,7 @@ from pipeline.evaluate import evaluate_trajectory
 from pipeline.package import package_lerobot
 from pipeline.pose import extract_pose_from_video
 from pipeline.preprocess import extract_frames
+from pipeline.render_sim import render_simulation_video
 from pipeline.retarget import retarget_to_robot
 
 
@@ -142,6 +143,24 @@ async def run_pipeline(
         _callback("failed", 0.9, PipelineStage.PACKAGE, str(exc))
         return {"status": "failed", "stage": PipelineStage.PACKAGE, "error": str(exc)}
 
+    try:
+        _callback(
+            "running",
+            0.92,
+            PipelineStage.FINALIZE,
+            "Rendering simulation video...",
+        )
+        sim_video_path = output_dir / "simulation.mp4"
+        await loop.run_in_executor(
+            None,
+            render_simulation_video,
+            joint_trajectory,
+            sim_video_path,
+        )
+    except Exception as exc:
+        _callback("failed", 0.92, PipelineStage.FINALIZE, str(exc))
+        return {"status": "failed", "stage": PipelineStage.FINALIZE, "error": str(exc)}
+
     result = {
         "status": "completed",
         "job_id": job_id,
@@ -156,6 +175,7 @@ async def run_pipeline(
         },
         "evaluation": eval_result,
         "package": pkg_result,
+        "simulation_video": str(sim_video_path),
     }
 
     _callback("completed", 1.0, PipelineStage.FINALIZE, "Pipeline completed successfully")

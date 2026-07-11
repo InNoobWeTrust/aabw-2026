@@ -36,6 +36,7 @@ from pipeline.evaluate import evaluate_trajectory
 from pipeline.package import package_lerobot
 from pipeline.pose import extract_pose_from_video
 from pipeline.preprocess import extract_frames
+from pipeline.render_sim import render_simulation_video
 from pipeline.retarget import retarget_to_robot
 
 router = APIRouter()
@@ -263,11 +264,39 @@ async def _run_pipeline(job_id: str) -> None:
             metadata,
             str(package_dir),
         )
+    except Exception as exc:
+        _update_job(
+            job_id,
+            JobStatus.FAILED,
+            0.88,
+            PipelineStage.PACKAGE,
+            str(exc),
+            failure_reason=str(exc),
+        )
+        return
+
+    # Stage: FINALIZE
+    try:
+        _update_job(
+            job_id,
+            JobStatus.RUNNING,
+            0.92,
+            PipelineStage.FINALIZE,
+            "Rendering simulation video...",
+        )
+        sim_video_path = out / "simulation.mp4"
+        await loop.run_in_executor(
+            None,
+            render_simulation_video,
+            retarget_result["joint_trajectory"],
+            sim_video_path,
+        )
 
         result_payload = {
             "evaluation": eval_result,
             "package": pkg_result,
             "output_dir": str(package_dir),
+            "simulation_video": str(sim_video_path),
         }
         _update_job(
             job_id,
@@ -281,8 +310,8 @@ async def _run_pipeline(job_id: str) -> None:
         _update_job(
             job_id,
             JobStatus.FAILED,
-            0.88,
-            PipelineStage.PACKAGE,
+            0.92,
+            PipelineStage.FINALIZE,
             str(exc),
             failure_reason=str(exc),
         )
