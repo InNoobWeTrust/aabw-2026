@@ -133,6 +133,12 @@ export default function VideoInspector({
 
   // Build secure URLs
   const getUrl = (type: string) => {
+    if (type === "skeleton-overlay" || type === "overlay") {
+      return `/api/jobs/${jobId}/downloads/skeleton_overlay_video?token=${token}`;
+    }
+    if (type === "skeleton-preview" || type === "preview") {
+      return `/api/jobs/${jobId}/downloads/skeleton_preview_video?token=${token}`;
+    }
     return `/api/jobs/${jobId}/video/${type}?token=${token}`;
   };
 

@@ -1056,7 +1056,7 @@ def download_dataset(
 def download_artifact(
     job_id: str,
     artifact_key: str,
-    identity: SessionIdentity = Depends(require_authenticated_identity),
+    identity: SessionIdentity = Depends(require_authenticated_identity_optional_query),
 ):
     """Download a specific artifact or zipped dataset branch for a job."""
     try:
