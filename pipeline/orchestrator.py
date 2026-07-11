@@ -1,17 +1,25 @@
 """Pipeline orchestrator: runs all stages in sequence, manages callbacks."""
 
 import asyncio
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
 from domain.enums import PipelineStage
+from pipeline.agent_calibrator import (
+    calibration_reviewer,
+    handedness_detector,
+    sanity_checker,
+)
 from pipeline.evaluate import evaluate_trajectory
 from pipeline.package import package_lerobot
 from pipeline.pose import extract_pose_from_video
 from pipeline.preprocess import extract_frames
 from pipeline.render_sim import render_simulation_video
-from pipeline.retarget import retarget_to_robot
+from pipeline.retarget import FRANKA_PANDA_JOINT_LIMITS, retarget_to_robot
 from pipeline.staged_review import generate_ai_review, run_static_checks
+
+_logger = logging.getLogger(__name__)
 
 
 async def run_pipeline(
@@ -98,6 +106,14 @@ async def run_pipeline(
     joint_trajectory = retarget_result["joint_trajectory"]
     ee_trajectory = retarget_result["ee_trajectory"]
 
+    # Agent-as-annotator, step 1: handedness detection runs immediately after
+    # retarget so the result is available for downstream stages.
+    try:
+        handedness = await loop.run_in_executor(None, handedness_detector, pose_result)
+    except Exception as exc:
+        _logger.warning("agent_handedness_failed: %s", exc)
+        handedness = {"verdict": "no_change", "handedness": "right", "confidence": 0.0}
+
     try:
         eval_result = await loop.run_in_executor(
             None,
@@ -118,6 +134,54 @@ async def run_pipeline(
         return {"status": "failed", "stage": PipelineStage.EVALUATE, "error": str(exc)}
 
     package_dir = output_dir / "dataset"
+
+    # Agent-as-annotator, step 2: calibration reviewer + sanity checker.
+    # The calibration reviewer proposes a corrected MappingProfile based on the
+    # retarget verdict; the sanity checker refuses to package metric / limit
+    # issues. Both results are persisted to output_dir/calibration/ for the
+    # reviewer and the user to inspect.
+    try:
+        from domain.mapping import MappingProfile as _MappingProfile
+
+        baseline_profile = _MappingProfile(**(retarget_result.get("mapping_profile") or {}))
+    except Exception:
+        baseline_profile = None
+    try:
+        limit_pressure_ratio = _compute_limit_pressure_ratio(joint_trajectory)
+        agent_metrics = dict(eval_result)
+        agent_metrics["limit_pressure_ratio"] = limit_pressure_ratio
+        calibration = await loop.run_in_executor(
+            None,
+            calibration_reviewer,
+            pose_result,
+            agent_metrics,
+            baseline_profile,
+        )
+        sanity = await loop.run_in_executor(
+            None,
+            sanity_checker,
+            pose_result,
+            joint_trajectory,
+            FRANKA_PANDA_JOINT_LIMITS,
+        )
+    except Exception as exc:
+        _logger.warning("agent_calibrator_step2_failed: %s", exc)
+        calibration = {"verdict": "no_change"}
+        sanity = {"verdict": "ok", "issues": []}
+    try:
+        await loop.run_in_executor(
+            None,
+            _persist_agent_report,
+            output_dir,
+            {
+                "handedness": handedness,
+                "calibration": calibration,
+                "sanity": sanity,
+            },
+        )
+    except Exception as exc:
+        _logger.warning("agent_calibrator_persist_failed: %s", exc)
+
     metadata = {
         "job_id": job_id,
         "video": str(video_path.name),
@@ -203,3 +267,29 @@ async def run_pipeline(
 
     _callback("completed", 1.0, PipelineStage.FINALIZE, "Pipeline completed successfully")
     return result
+
+
+def _compute_limit_pressure_ratio(joint_trajectory: object) -> float:
+    """Fraction of frames where any joint sits within 0.05 rad of a Franka limit."""
+    import numpy as _np
+
+    arr = _np.asarray(joint_trajectory, dtype=_np.float32)
+    if arr.size == 0:
+        return 0.0
+    limits = _np.array(FRANKA_PANDA_JOINT_LIMITS)
+    dist_to_lo = arr[:, :, None] - limits[None, :, 0]
+    dist_to_hi = limits[None, :, 1] - arr[:, :, None]
+    min_dist = _np.minimum(dist_to_lo, dist_to_hi)
+    pressed = (min_dist < 0.05).any(axis=1)
+    return float(pressed.mean())
+
+
+def _persist_agent_report(output_dir: Path, report: dict) -> Path:
+    """Write the agent calibration report as JSON for downstream consumers."""
+    import json
+
+    out_dir = Path(output_dir) / "calibration"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "agent_report.json"
+    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_path

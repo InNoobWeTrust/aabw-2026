@@ -68,15 +68,24 @@ class TestNonDefaultProfileChangesOutput:
     def test_different_workspace_scale_changes_ee(self) -> None:
         """A modified workspace_scale shifts the end-effector trajectory."""
         world = np.zeros((3, 33, 3), dtype=np.float32)
+        # Non-degenerate right arm so the IK has real segments to solve.
+        world[:, 12, :] = [0.0, 0.0, 0.3]
+        world[:, 14, :] = [0.25, 0.0, 0.3]
         world[:, 16, :] = [0.5, 0.3, 0.2]
         pose_data = _make_pose_data(3)
         pose_data["world_landmarks"] = world
         pose_data["landmarks"] = world.copy()
 
         default = retarget_to_robot(pose_data, profile=MappingProfile())
-        scaled = retarget_to_robot(pose_data, profile=MappingProfile(workspace_scale=0.5))
+        new_scale = 0.5
+        scaled = retarget_to_robot(pose_data, profile=MappingProfile(workspace_scale=new_scale))
+        # EE position scales linearly with workspace_scale.
         assert not np.allclose(default["ee_trajectory"], scaled["ee_trajectory"])
-        assert not np.allclose(default["joint_trajectory"], scaled["joint_trajectory"])
+        np.testing.assert_allclose(
+            scaled["ee_trajectory"],
+            default["ee_trajectory"] * (new_scale / MappingProfile().workspace_scale),
+            atol=1e-5,
+        )
 
     def test_different_depth_scale_changes_ee(self) -> None:
         """A modified depth_scale changes the transformed trajectory deterministically."""

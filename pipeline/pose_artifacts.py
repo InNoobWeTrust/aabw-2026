@@ -45,7 +45,12 @@ def render_skeleton_overlay_video(
     pose_result: dict,
     output_path: str | Path,
 ) -> Path:
-    """Draw extracted pose landmarks on top of the original video."""
+    """Draw extracted pose landmarks on top of the original video.
+
+    Uses ``landmarks`` (image-normalized, in [0, 1]) which corresponds directly to
+    pixel coordinates of the source frame — correct for an overlay. Do not pass
+    ``world_landmarks`` here; they are in meters and require a scale/translate.
+    """
     import subprocess
 
     video_path = Path(video_path)
@@ -125,6 +130,32 @@ def render_skeleton_overlay_video(
     return output_path
 
 
+def _compute_world_to_canvas_transform(
+    world_landmarks: np.ndarray, width: int, height: int
+) -> tuple[float, float, float]:
+    """Compute (scale, tx, ty) to map hip-centered metric landmarks into a canvas.
+
+    Returns scale in pixels per meter and pixel-space (tx, ty) to translate the
+    hip origin to the canvas center. The scale is chosen so that the bounding box
+    of detected landmarks fills the canvas without clipping.
+    """
+    if world_landmarks.size == 0:
+        return 200.0, width / 2.0, height / 2.0
+    mask = np.isfinite(world_landmarks).all(axis=2)
+    valid_points = world_landmarks[mask]
+    if valid_points.size == 0:
+        return 200.0, width / 2.0, height / 2.0
+    hip_x = float(valid_points[:, 0].mean())
+    hip_y = float(valid_points[:, 1].mean())
+    centered = valid_points - np.array([hip_x, hip_y, 0.0], dtype=np.float32)
+    max_abs = float(np.abs(centered[:, :2]).max()) or 0.5
+    # Leave 10% margin on each side.
+    scale = 0.45 * min(width, height) / max_abs
+    tx = width / 2.0
+    ty = height / 2.0
+    return scale, tx, ty
+
+
 def render_skeleton_preview_video(
     pose_result: dict,
     output_path: str | Path,
@@ -132,7 +163,13 @@ def render_skeleton_preview_video(
     width: int = 640,
     height: int = 480,
 ) -> Path:
-    """Render a clean skeleton-only preview on a dark background."""
+    """Render a clean skeleton-only preview on a dark background.
+
+    Uses ``world_landmarks`` (metric, hip-centered). The pose is centered at the
+    canvas origin and scaled so the bounding box fills the frame. ``landmarks``
+    (image-normalized) are NOT used here — that coordinate space is reserved for
+    the overlay drawn on top of the source video.
+    """
     import subprocess
 
     output_path = Path(output_path)
@@ -147,17 +184,22 @@ def render_skeleton_preview_video(
         (width, height),
     )
 
-    landmarks = pose_result["landmarks"]
+    world_landmarks = pose_result["world_landmarks"]
     confidence = pose_result["confidence"]
     detected_mask = pose_result.get("detected_frames_mask")
 
+    if world_landmarks.size:
+        scale, tx, ty = _compute_world_to_canvas_transform(world_landmarks, width, height)
+    else:
+        scale, tx, ty = 200.0, width / 2.0, height / 2.0
+
     try:
-        for idx, points in enumerate(landmarks):
+        for idx, points in enumerate(world_landmarks):
             canvas = np.zeros((height, width, 3), dtype=np.uint8)
             canvas[:] = (15, 23, 42)
             conf = confidence[idx]
             detected = bool(detected_mask[idx]) if detected_mask is not None else True
-            _draw_pose(canvas, points, conf, detected)
+            _draw_pose_world(canvas, points, conf, detected, scale, tx, ty)
             cv2.putText(
                 canvas,
                 "Skeleton preview",
@@ -278,3 +320,54 @@ def _to_pixel(point: np.ndarray, width: int, height: int) -> tuple[int, int] | N
     if x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0:
         return None
     return int(x * (width - 1)), int(y * (height - 1))
+
+
+def _draw_pose_world(
+    frame: np.ndarray,
+    points: np.ndarray,
+    confidence: np.ndarray,
+    detected: bool,
+    scale: float,
+    tx: float,
+    ty: float,
+) -> None:
+    """Draw metric world landmarks onto a canvas using a fixed pixel transform.
+
+    The transform (scale, tx, ty) is computed once per video by
+    ``_compute_world_to_canvas_transform`` so the skeleton is centered and fills
+    the canvas. This is the world-space analog of ``_draw_pose``.
+    """
+    height, width = frame.shape[:2]
+    link_color = (0, 212, 170) if detected else (100, 116, 139)
+    point_color = (244, 63, 94) if detected else (148, 163, 184)
+
+    def _project(point: np.ndarray) -> tuple[int, int] | None:
+        x, y = float(point[0]), float(point[1])
+        if not np.isfinite(x) or not np.isfinite(y):
+            return None
+        px = int(tx + x * scale)
+        # MediaPipe world Y points down in the source frame but conceptually "up"
+        # in the body; invert it so the skeleton reads naturally.
+        py = int(ty - y * scale)
+        if px < 0 or px >= width or py < 0 or py >= height:
+            return None
+        return px, py
+
+    for start, end in POSE_CONNECTIONS:
+        if confidence[start] < RENDER_VISIBILITY_THRESHOLD:
+            continue
+        if confidence[end] < RENDER_VISIBILITY_THRESHOLD:
+            continue
+        p1 = _project(points[start])
+        p2 = _project(points[end])
+        if p1 is None or p2 is None:
+            continue
+        cv2.line(frame, p1, p2, link_color, 2, cv2.LINE_AA)
+
+    for idx, point in enumerate(points):
+        if confidence[idx] < RENDER_VISIBILITY_THRESHOLD:
+            continue
+        center = _project(point)
+        if center is None:
+            continue
+        cv2.circle(frame, center, 4, point_color, -1, cv2.LINE_AA)
