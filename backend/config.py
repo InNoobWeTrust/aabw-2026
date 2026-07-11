@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     review_timeout_seconds: int = 60
     review_max_context_chars: int = 24000
     review_stream_chunk_chars: int = 240
+    assistant_max_turns: int = 6
+    assistant_max_messages: int = 24
+    assistant_max_context_chars: int = 20000
 
     model_config = {
         "env_file": ".env",

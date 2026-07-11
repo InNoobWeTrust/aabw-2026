@@ -11,6 +11,8 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
+from backend.assistant_service import ReviewAssistantService
+from backend.assistant_store import FileSystemAssistantStore
 from backend.auth import (
     _decode_token,
     authenticate_password,
@@ -24,6 +26,12 @@ from backend.config import settings
 from backend.job_store import FileSystemJobStore
 from backend.models import (
     ArtifactManifestResponse,
+    AssistantMessageCreateRequest,
+    AssistantMessageResponse,
+    AssistantSessionCreateRequest,
+    AssistantSessionDetailResponse,
+    AssistantSessionListResponse,
+    AssistantSessionResponse,
     JobListResponse,
     JobResponse,
     LoginRequest,
@@ -41,9 +49,9 @@ from backend.review_service import (
 )
 from backend.review_store import FileSystemReviewStore
 from domain.auth import SessionIdentity
-from domain.enums import JobStatus, PipelineStage, ReviewStage
+from domain.enums import AssistantSessionStatus, JobStatus, PipelineStage, ReviewStage
 from domain.jobs import JobEvent, JobOwner, JobSnapshot
-from domain.reviews import ReviewSnapshot
+from domain.reviews import AssistantMessage, AssistantSessionSnapshot, ReviewSnapshot
 from pipeline.evaluate import evaluate_trajectory
 from pipeline.package import package_lerobot, package_lerobot_skeleton
 from pipeline.pose import extract_pose_from_video
@@ -64,7 +72,9 @@ _logger = logging.getLogger(__name__)
 
 _job_store = FileSystemJobStore(settings.jobs_dir)
 _review_store = FileSystemReviewStore(settings.jobs_dir)
+_assistant_store = FileSystemAssistantStore(settings.jobs_dir)
 _review_service = ReviewService(_review_store)
+_assistant_service = ReviewAssistantService(_assistant_store, _job_store, _review_store)
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm"}
 
@@ -108,6 +118,16 @@ def _review_to_response(snapshot: ReviewSnapshot) -> ReviewSnapshotResponse:
     return ReviewSnapshotResponse(**snapshot.model_dump())
 
 
+def _assistant_session_to_response(snapshot: AssistantSessionSnapshot) -> AssistantSessionResponse:
+    """Map a persisted assistant session snapshot to an HTTP response model."""
+    return AssistantSessionResponse(**snapshot.model_dump())
+
+
+def _assistant_message_to_response(message: AssistantMessage) -> AssistantMessageResponse:
+    """Map a persisted assistant message to an HTTP response model."""
+    return AssistantMessageResponse(**message.model_dump())
+
+
 def _artifact_manifest(job_id: str, snapshot: JobSnapshot) -> dict:
     """Return a stage-aware artifact manifest for a job."""
     output_dir = Path(snapshot.output_dir)
@@ -129,6 +149,7 @@ def _artifact_manifest(job_id: str, snapshot: JobSnapshot) -> dict:
         "robot_simulation_video_url": f"/api/jobs/{job_id}/downloads/robot_simulation_video",
         "pose_review_md_url": f"/api/jobs/{job_id}/downloads/pose_review_md",
         "retarget_review_md_url": f"/api/jobs/{job_id}/downloads/retarget_review_md",
+        "assistant_sessions_url": f"/api/jobs/{job_id}/assistant/sessions",
     }
 
 
@@ -850,6 +871,161 @@ async def stream_review(
                 sent += 1
             review = _review_store.get_review(job_id, review_stage)
             if review.status.is_terminal():
+                break
+            await _asyncio.sleep(0.25)
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
+@router.get("/jobs/{job_id}/assistant/sessions", response_model=AssistantSessionListResponse)
+def list_assistant_sessions(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """List persisted reviewer-assistant sessions for one job."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    sessions = [_assistant_session_to_response(s) for s in _assistant_store.list_sessions(job_id)]
+    return AssistantSessionListResponse(sessions=sessions)
+
+
+@router.post("/jobs/{job_id}/assistant/sessions", response_model=AssistantSessionDetailResponse)
+def create_assistant_session(
+    job_id: str,
+    body: AssistantSessionCreateRequest,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Create a reviewer-assistant session and optionally seed the first user message."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    session = _assistant_service.create_session(job_id, title=body.title)
+    messages: list[AssistantMessageResponse] = []
+    if body.message:
+        _assistant_service.submit_user_message(job_id, session.session_id, body.message)
+        messages = [
+            _assistant_message_to_response(m)
+            for m in _assistant_store.list_messages(job_id, session.session_id)
+        ]
+    return AssistantSessionDetailResponse(
+        session=_assistant_session_to_response(
+            _assistant_store.get_session(job_id, session.session_id)
+        ),
+        messages=messages,
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/assistant/sessions/{session_id}",
+    response_model=AssistantSessionDetailResponse,
+)
+def get_assistant_session(
+    job_id: str,
+    session_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Return one assistant session plus its transcript."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    try:
+        session = _assistant_store.get_session(job_id, session_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Assistant session {session_id} not found"
+        ) from None
+    messages = [
+        _assistant_message_to_response(m)
+        for m in _assistant_store.list_messages(job_id, session_id)
+    ]
+    return AssistantSessionDetailResponse(
+        session=_assistant_session_to_response(session),
+        messages=messages,
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/assistant/sessions/{session_id}/messages",
+    response_model=AssistantSessionDetailResponse,
+)
+def post_assistant_message(
+    job_id: str,
+    session_id: str,
+    body: AssistantMessageCreateRequest,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Append a user message and trigger one bounded assistant loop."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    try:
+        _assistant_store.get_session(job_id, session_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Assistant session {session_id} not found"
+        ) from None
+
+    _assistant_service.submit_user_message(job_id, session_id, body.content)
+    session = _assistant_store.get_session(job_id, session_id)
+    messages = [
+        _assistant_message_to_response(m)
+        for m in _assistant_store.list_messages(job_id, session_id)
+    ]
+    return AssistantSessionDetailResponse(
+        session=_assistant_session_to_response(session),
+        messages=messages,
+    )
+
+
+@router.get("/jobs/{job_id}/assistant/sessions/{session_id}/stream")
+async def stream_assistant_session(
+    job_id: str,
+    session_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity_optional_query),
+):
+    """Stream reviewer-assistant events for one session over SSE."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    try:
+        _assistant_store.get_session(job_id, session_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Assistant session {session_id} not found"
+        ) from None
+
+    async def _event_stream():
+        import asyncio as _asyncio
+        import json as _json
+
+        sent = 0
+        while True:
+            events = _assistant_store.list_events(job_id, session_id)
+            while sent < len(events):
+                event = events[sent]
+                payload = _json.dumps(event.payload, ensure_ascii=False)
+                yield f"event: {event.event}\ndata: {payload}\n\n"
+                sent += 1
+            session = _assistant_store.get_session(job_id, session_id)
+            if session.status in (AssistantSessionStatus.IDLE, AssistantSessionStatus.FAILED):
                 break
             await _asyncio.sleep(0.25)
 

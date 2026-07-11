@@ -8,7 +8,15 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from domain.enums import JobStatus, PipelineStage, ReviewStage, ReviewStatus, ReviewVerdict
+from domain.enums import (
+    AssistantMessageRole,
+    AssistantSessionStatus,
+    JobStatus,
+    PipelineStage,
+    ReviewStage,
+    ReviewStatus,
+    ReviewVerdict,
+)
 
 
 class LoginRequest(BaseModel):
@@ -102,3 +110,56 @@ class ArtifactManifestResponse(BaseModel):
     """Manifest of generated artifacts for a completed or partially completed job."""
 
     artifacts: dict
+
+
+class AssistantSessionCreateRequest(BaseModel):
+    """Create a reviewer-assistant session, optionally with a seed user message."""
+
+    message: str | None = None
+    title: str | None = None
+
+
+class AssistantMessageCreateRequest(BaseModel):
+    """Submit a user message into an existing reviewer-assistant session."""
+
+    content: str
+
+
+class AssistantSessionResponse(BaseModel):
+    """Public-facing reviewer-assistant session snapshot."""
+
+    job_id: str
+    session_id: str
+    status: AssistantSessionStatus
+    provider: str
+    sandbox: str
+    created_at: datetime
+    updated_at: datetime
+    last_error: str | None = None
+    title: str | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class AssistantMessageResponse(BaseModel):
+    """Public-facing reviewer-assistant transcript message."""
+
+    at: datetime
+    job_id: str
+    session_id: str
+    role: AssistantMessageRole
+    content: str
+    name: str | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class AssistantSessionDetailResponse(BaseModel):
+    """Reviewer-assistant session plus transcript."""
+
+    session: AssistantSessionResponse
+    messages: list[AssistantMessageResponse]
+
+
+class AssistantSessionListResponse(BaseModel):
+    """Wrapper for listing reviewer-assistant sessions attached to a job."""
+
+    sessions: list[AssistantSessionResponse]

@@ -12,7 +12,13 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from domain.enums import ReviewStage, ReviewStatus, ReviewVerdict
+from domain.enums import (
+    AssistantMessageRole,
+    AssistantSessionStatus,
+    ReviewStage,
+    ReviewStatus,
+    ReviewVerdict,
+)
 
 
 class ReviewSnapshot(BaseModel):
@@ -40,5 +46,42 @@ class ReviewEvent(BaseModel):
     at: datetime
     job_id: str
     review_stage: ReviewStage
+    event: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantSessionSnapshot(BaseModel):
+    """Point-in-time snapshot of one reviewer-assistant chat session."""
+
+    job_id: str
+    session_id: str
+    status: AssistantSessionStatus
+    provider: str
+    sandbox: str
+    created_at: datetime
+    updated_at: datetime
+    last_error: str | None = None
+    title: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantMessage(BaseModel):
+    """Persisted transcript message in a reviewer-assistant chat session."""
+
+    at: datetime
+    job_id: str
+    session_id: str
+    role: AssistantMessageRole
+    content: str
+    name: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantEvent(BaseModel):
+    """Append-only SSE event for a reviewer-assistant session."""
+
+    at: datetime
+    job_id: str
+    session_id: str
     event: str
     payload: dict[str, Any] = Field(default_factory=dict)

@@ -213,7 +213,6 @@ def build_pose_review_factory(
     return _factory
 
 
-
 def build_retarget_review_factory(
     *,
     eval_result: dict[str, Any],
@@ -251,7 +250,6 @@ def build_retarget_review_factory(
     return _factory
 
 
-
 def _retarget_verdict(eval_result: dict[str, Any]) -> ReviewVerdict:
     grade = str(eval_result.get("overall_grade", "red"))
     if grade == "green":
@@ -261,12 +259,10 @@ def _retarget_verdict(eval_result: dict[str, Any]) -> ReviewVerdict:
     return ReviewVerdict.USABLE_SKELETON_ONLY
 
 
-
 def _chunk_text(text: str, width: int) -> list[str]:
     if width <= 0:
         return [text]
     return [text[i : i + width] for i in range(0, len(text), width)] or [""]
-
 
 
 def _build_daytona_review_program(
@@ -286,7 +282,7 @@ def _build_daytona_review_program(
         "You are a robotics dataset review agent. Return strict JSON only."
     )
 
-    return f'''
+    return f"""
 import json
 import urllib.request
 
@@ -323,8 +319,7 @@ with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
 message = raw["choices"][0]["message"]["content"]
 payload = json.loads(message)
 print(json.dumps(payload))
-'''
-
+"""
 
 
 def _build_review_prompt(job_id: str, stage: ReviewStage, context_manifest: dict[str, Any]) -> str:

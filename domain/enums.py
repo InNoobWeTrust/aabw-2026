@@ -138,3 +138,20 @@ class ReviewVerdict(str, enum.Enum):
     USABLE_SKELETON_ONLY = "usable_skeleton_only"
     NEEDS_REVIEW = "needs_review"
     REJECTED = "rejected"
+
+
+class AssistantSessionStatus(str, enum.Enum):
+    """Lifecycle state for an interactive reviewer-assistant session."""
+
+    IDLE = "idle"
+    RUNNING = "running"
+    FAILED = "failed"
+
+
+class AssistantMessageRole(str, enum.Enum):
+    """Role labels persisted in a reviewer-assistant conversation transcript."""
+
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
