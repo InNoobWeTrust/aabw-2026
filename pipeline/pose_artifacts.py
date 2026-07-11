@@ -7,20 +7,28 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-POSE_CONNECTIONS = [
-    (11, 12),
-    (11, 13),
-    (13, 15),
-    (12, 14),
-    (14, 16),
-    (11, 23),
-    (12, 24),
-    (23, 24),
-    (23, 25),
-    (25, 27),
-    (24, 26),
-    (26, 28),
-]
+try:
+    import mediapipe as mp
+
+    _POSE_CONNECTIONS = list(mp.solutions.pose.POSE_CONNECTIONS)
+except Exception:
+    _POSE_CONNECTIONS = [
+        (11, 12),
+        (11, 13),
+        (13, 15),
+        (12, 14),
+        (14, 16),
+        (11, 23),
+        (12, 24),
+        (23, 24),
+        (23, 25),
+        (25, 27),
+        (24, 26),
+        (26, 28),
+    ]
+
+POSE_CONNECTIONS = sorted((int(start), int(end)) for start, end in _POSE_CONNECTIONS)
+RENDER_VISIBILITY_THRESHOLD = 0.35
 
 POSE_KEYPOINTS = {
     "left_shoulder": 11,
@@ -244,20 +252,29 @@ def _draw_pose(
     point_color = (244, 63, 94) if detected else (148, 163, 184)
 
     for start, end in POSE_CONNECTIONS:
-        if confidence[start] <= 0.01 or confidence[end] <= 0.01:
+        if confidence[start] < RENDER_VISIBILITY_THRESHOLD:
+            continue
+        if confidence[end] < RENDER_VISIBILITY_THRESHOLD:
             continue
         p1 = _to_pixel(points[start], width, height)
         p2 = _to_pixel(points[end], width, height)
+        if p1 is None or p2 is None:
+            continue
         cv2.line(frame, p1, p2, link_color, 2, cv2.LINE_AA)
 
     for idx, point in enumerate(points):
-        if confidence[idx] <= 0.01:
+        if confidence[idx] < RENDER_VISIBILITY_THRESHOLD:
             continue
         center = _to_pixel(point, width, height)
+        if center is None:
+            continue
         cv2.circle(frame, center, 4, point_color, -1, cv2.LINE_AA)
 
 
-def _to_pixel(point: np.ndarray, width: int, height: int) -> tuple[int, int]:
-    x = int(np.clip(point[0], 0.0, 1.0) * (width - 1))
-    y = int(np.clip(point[1], 0.0, 1.0) * (height - 1))
-    return x, y
+def _to_pixel(point: np.ndarray, width: int, height: int) -> tuple[int, int] | None:
+    x, y = float(point[0]), float(point[1])
+    if not np.isfinite(x) or not np.isfinite(y):
+        return None
+    if x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0:
+        return None
+    return int(x * (width - 1)), int(y * (height - 1))
