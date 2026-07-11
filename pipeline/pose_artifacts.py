@@ -38,6 +38,8 @@ def render_skeleton_overlay_video(
     output_path: str | Path,
 ) -> Path:
     """Draw extracted pose landmarks on top of the original video."""
+    import subprocess
+
     video_path = Path(video_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -50,8 +52,10 @@ def render_skeleton_overlay_video(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
+    temp_path = output_path.with_suffix(".raw.mp4")
+
     writer = cv2.VideoWriter(
-        str(output_path),
+        str(temp_path),
         cv2.VideoWriter_fourcc(*"mp4v"),
         fps,
         (width, height),
@@ -61,30 +65,55 @@ def render_skeleton_overlay_video(
     detected_mask = pose_result.get("detected_frames_mask")
 
     frame_idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret or frame_idx >= len(landmarks):
-            break
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret or frame_idx >= len(landmarks):
+                break
 
-        points = landmarks[frame_idx]
-        conf = confidence[frame_idx]
-        detected = bool(detected_mask[frame_idx]) if detected_mask is not None else True
-        _draw_pose(frame, points, conf, detected)
-        cv2.putText(
-            frame,
-            f"Skeleton overlay | frame {frame_idx + 1}/{len(landmarks)}",
-            (20, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
+            points = landmarks[frame_idx]
+            conf = confidence[frame_idx]
+            detected = bool(detected_mask[frame_idx]) if detected_mask is not None else True
+            _draw_pose(frame, points, conf, detected)
+            cv2.putText(
+                frame,
+                f"Skeleton overlay | frame {frame_idx + 1}/{len(landmarks)}",
+                (20, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+            writer.write(frame)
+            frame_idx += 1
+    finally:
+        writer.release()
+        cap.release()
+
+    # Transcode raw video to H.264 browser-compatible format using FFmpeg
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(temp_path),
+                "-vcodec",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-loglevel",
+                "error",
+                str(output_path),
+            ],
+            check=True,
         )
-        writer.write(frame)
-        frame_idx += 1
+        temp_path.unlink(missing_ok=True)
+    except Exception:
+        if temp_path.exists():
+            temp_path.rename(output_path)
 
-    writer.release()
-    cap.release()
     return output_path
 
 
@@ -96,10 +125,15 @@ def render_skeleton_preview_video(
     height: int = 480,
 ) -> Path:
     """Render a clean skeleton-only preview on a dark background."""
+    import subprocess
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    temp_path = output_path.with_suffix(".raw.mp4")
+
     writer = cv2.VideoWriter(
-        str(output_path),
+        str(temp_path),
         cv2.VideoWriter_fourcc(*"mp4v"),
         fps,
         (width, height),
@@ -109,25 +143,50 @@ def render_skeleton_preview_video(
     confidence = pose_result["confidence"]
     detected_mask = pose_result.get("detected_frames_mask")
 
-    for idx, points in enumerate(landmarks):
-        canvas = np.zeros((height, width, 3), dtype=np.uint8)
-        canvas[:] = (15, 23, 42)
-        conf = confidence[idx]
-        detected = bool(detected_mask[idx]) if detected_mask is not None else True
-        _draw_pose(canvas, points, conf, detected)
-        cv2.putText(
-            canvas,
-            "Skeleton preview",
-            (20, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (241, 245, 249),
-            2,
-            cv2.LINE_AA,
-        )
-        writer.write(canvas)
+    try:
+        for idx, points in enumerate(landmarks):
+            canvas = np.zeros((height, width, 3), dtype=np.uint8)
+            canvas[:] = (15, 23, 42)
+            conf = confidence[idx]
+            detected = bool(detected_mask[idx]) if detected_mask is not None else True
+            _draw_pose(canvas, points, conf, detected)
+            cv2.putText(
+                canvas,
+                "Skeleton preview",
+                (20, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (241, 245, 249),
+                2,
+                cv2.LINE_AA,
+            )
+            writer.write(canvas)
+    finally:
+        writer.release()
 
-    writer.release()
+    # Transcode raw video to H.264 browser-compatible format using FFmpeg
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(temp_path),
+                "-vcodec",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-loglevel",
+                "error",
+                str(output_path),
+            ],
+            check=True,
+        )
+        temp_path.unlink(missing_ok=True)
+    except Exception:
+        if temp_path.exists():
+            temp_path.rename(output_path)
+
     return output_path
 
 
