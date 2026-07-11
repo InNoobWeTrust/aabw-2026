@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: robodata
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATA_DIR
+        value: /app/data
+      - key: JUDGE_ACCESS_PASSWORD
+        sync: false
+      - key: ADMIN_ACCESS_PASSWORD
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: JWT_EXPIRY_HOURS
+        value: "24"
+      - key: MAX_VIDEO_DURATION_SECONDS
+        value: "30"
+      - key: MAX_VIDEO_SIZE_MB
+        value: "100"
+      - key: TARGET_ROBOT
+        value: franka_panda
+    disk:
+      name: robodata-data
+      mountPath: /app/data
+      sizeGB: 10

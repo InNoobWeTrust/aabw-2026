@@ -1,3 +1,5 @@
+<!-- Original README preserved in docs/README-original.md -->
+
 # 🤖 ロボット転生 (Robot Reincarnation)
 
 **Phone video → Robot policy data. Zero hardware. Zero training.**
@@ -24,36 +26,128 @@ graph LR
     H --> C
 ```
 
-## How It Works
+## Quick Start (Local Dev)
 
-1. **Record** — Film a 30-second phone video of any manual task (pouring, wiping, picking, placing)
-2. **Upload** — Send it through the hosted pipeline API; the orchestrator agent analyzes video quality, classifies the task, and routes it through the pipeline
-3. **Get a dataset** — Download a LeRobot-format dataset ready for policy fine-tuning on any robot (Franka Panda by default)
+```bash
+# Clone and set up
+git clone <repo-url> && cd aabw-2026
 
-## Architecture
+# Install dependencies (uv manages the virtual environment automatically)
+uv sync --extra dev
+
+# Configure environment
+cp .env.example .env
+# Edit .env — set JUDGE_ACCESS_PASSWORD, ADMIN_ACCESS_PASSWORD, and JWT_SECRET_KEY
+
+# Run the server (reachable over Tailscale/LAN)
+uv run uvicorn backend.server:app --host 0.0.0.0 --reload --port 8000
+# or: make dev-lan
+# local-only bind: make dev-local
+
+# Run tests
+uv run pytest -v
+```
+
+## Environment Variables
+
+| Variable | Description | Default |
+|---|---|---|---|
+| `JUDGE_ACCESS_PASSWORD` | Shared password for judge login (anonymous session) | (required) |
+| `ADMIN_ACCESS_PASSWORD` | Password for admin login (global visibility) | (required) |
+| `ACCESS_PASSWORD` | Legacy fallback for judge password (deprecated) | (none) |
+| `JWT_SECRET_KEY` | HMAC secret for signing JWTs | (required) |
+| `JWT_EXPIRY_HOURS` | Token lifetime in hours | `24` |
+| `MAX_VIDEO_DURATION_SECONDS` | Maximum uploaded video duration | `30` |
+| `MAX_VIDEO_SIZE_MB` | Maximum uploaded video file size | `100` |
+| `DATA_DIR` | Root directory for all persistent state (`jobs/`, `queue/`) | `./data` |
+| `TARGET_ROBOT` | Default robot URDF for IK retargeting | `franka_panda` |
+| `HOST` | Server bind address | `0.0.0.0` |
+| `PORT` | Server listen port | `8000` |
+
+## Deployment
+
+### Docker
+
+```bash
+# Generate the lock file first (required for reproducible Docker builds)
+uv lock
+
+# Build and run
+docker build -t robodata:latest .
+docker run -p 8000:8000 --env-file .env -v $(pwd)/data:/app/data robodata:latest
+```
+
+The volume mount at `/app/data` is the canonical persistence path. All job state, queue entries, intermediate artifacts, and output datasets live under `/app/data/jobs/` and `/app/data/queue/`. `DATA_DIR` is set to `/app/data` in the Dockerfile.
+
+### Render
+
+1. Run `uv lock` to generate `uv.lock` (required for the Docker build).
+2. Push the image to your registry (`docker push ...`), or connect the repo and let Render build from the Dockerfile.
+3. Use the included `render.yaml` for one-click setup. It provisions:
+   - A Docker-based Web Service on the Starter plan
+   - A 10 GB persistent disk mounted at `/app/data`
+   - Environment variables (`DATA_DIR`, `JWT_EXPIRY_HOURS`, etc.)
+4. Set `JUDGE_ACCESS_PASSWORD`, `ADMIN_ACCESS_PASSWORD`, and `JWT_SECRET_KEY` as Render env vars (these are marked `sync: false` in render.yaml — they must be entered manually for security).
+5. Render uses `$PORT` automatically; the Procfile reads `$PORT`.
+
+## Architecture Overview
+
+The pipeline runs in 6 stages, all orchestrated locally:
+
+1. **Preprocess** (`pipeline/preprocess.py`) — Validate video format, extract frames, normalize resolution
+2. **Pose** (`pipeline/pose.py`) — Extract 33 3D landmarks via MediaPipe Pose (YOLO26 fallback)
+3. **Retarget** (`pipeline/retarget.py`) — Solve pinocchio IK to map human skeleton to robot joints
+4. **Evaluate** (`pipeline/evaluate.py`) — 5-gate scoring (kinematic feasibility, smoothness, task completion, LLM assessment, human review)
+5. **Package** (`pipeline/package.py`) — Export to LeRobot format (Parquet episodes + MP4 videos)
 
 ```mermaid
 graph TD
-    O[Multimodal LLM Orchestrator<br/>Claude/Gemini via Bedrock]
-    O --> QG[Quality Gate]
-    O --> TC[Task Classifier]
-    O --> OV[Output Validator]
-
-    PV[Phone Video 30s] --> MP[MediaPipe Pose<br/>Google, local, $0]
-    MP --> SK[3D Skeleton<br/>33 landmarks]
-    SK --> IK[pinocchio IK<br/>CPU, less than 1s]
-    IK --> LR[LeRobot Dataset<br/>Parquet + MP4]
-
-    MP -.->|fallback| YO[YOLO26-pose<br/>Replicate, $0.002/frame]
-    YO --> LIFT[2D to 3D Lifting]
-    LIFT --> SK
-
-    LR --> HF[HuggingFace Hub]
-
-    O -.->|trace| LF[Langfuse<br/>observability and tracing]
-    MP -.->|trace| LF
-    IK -.->|trace| LF
+    PV[Phone Video 30s] --> MP[MediaPipe Pose]
+    MP --> SK[3D Skeleton]
+    SK --> IK[pinocchio IK]
+    IK --> EV[5-Gate Evaluation]
+    EV --> LR[LeRobot Dataset]
 ```
+
+## API Endpoints
+
+| Method | Path | Description | Auth |
+|---|---|---|---|
+| `POST` | `/api/auth/login` | Exchange password for JWT token | No |
+| `GET` | `/api/auth/verify` | Verify current token validity (returns role + session) | JWT |
+| `POST` | `/api/jobs/upload` | Upload a video for processing (enqueues to FIFO worker) | JWT (any) |
+| `GET` | `/api/jobs` | List visible jobs (judge: own; admin: all) | JWT (any) |
+| `GET` | `/api/jobs/{job_id}` | Poll pipeline job status | JWT (any) |
+| `GET` | `/api/jobs/{job_id}/download` | Download generated LeRobot dataset (.zip) | JWT (any) |
+| `DELETE` | `/api/jobs/{job_id}` | Delete a non-running job and its files | JWT (any) |
+| `GET` | `/api/admin/jobs` | List all jobs across all sessions | JWT (admin) |
+| `GET` | `/api/admin/sessions` | Aggregate job counts grouped by judge session | JWT (admin) |
+
+**Architecture notes:**
+- **Single-worker FIFO queue:** Uploads are enqueued via `backend/queue_manager.py` and processed one-at-a-time in arrival order. The `filelock` library provides mutual exclusion around job dispatch.
+- **Startup recovery:** On server start, any jobs left in `RUNNING` status (e.g. after a crash) are automatically marked `FAILED` with reason `worker_restarted`. QUEUED jobs are preserved and will be picked up by the pump loop.
+- **Session isolation:** Each judge login generates a unique anonymous `judge_session_id`. A judge may have at most one active job at a time. Admin sessions have global visibility across all jobs.
+- **No external queue/database:** All persistence is filesystem-based under `data/jobs/` and `data/queue/`.
+
+## Auth Flow
+
+RoboData uses two separate auth channels with role-based JWT tokens:
+
+1. **Judge login**: Send `POST /api/auth/login` with `{"password": "<JUDGE_ACCESS_PASSWORD>"}`
+   - Server verifies password with constant-time comparison
+   - Returns a JWT containing `role=judge` and a randomly generated `judge_session_id` (UUID)
+   - Judge sessions are anonymous — no registration or PII collected
+   - A judge can only see, cancel, and delete their own jobs (scoped by `judge_session_id`)
+
+2. **Admin login**: Send `POST /api/auth/login` with `{"password": "<ADMIN_ACCESS_PASSWORD>"}`
+   - Returns a JWT with `role=admin` (no `judge_session_id`)
+   - Admin sessions have global visibility across all jobs
+
+3. All protected endpoints require `Authorization: Bearer <token>` header
+4. Tokens are stateless — validated via HMAC-SHA256 signature, no database needed
+5. `GET /api/auth/verify` returns token validity, role, session identity, and expiration
+6. Frontend stores token in `localStorage` and includes it in all API calls
+7. Expired tokens return 401; wrong role for admin endpoints returns 403
 
 ## Tech Stack
 
@@ -71,40 +165,13 @@ graph TD
 
 **Pipeline cost:** $0 primary path (MediaPipe local) / ~$0.06–$0.36 with fallback + optional stages
 
-## Why This Matters
-
-- **Free primary pipeline** — $0/video with MediaPipe Pose (vs $1–$5/teleop demo)
-- **Privacy by construction** — No faces in output (not blurred — absent). No BIPA/GDPR liability
-- **Cross-embodiment** — One video → any robot. Swap the URDF; Franka Panda is the default
-- **Zero contributor friction** — Just a phone. No gripper, no wearable, no extra hardware
-- **Empty quadrant** — No incumbent in "crowdsourced × robotics-ready" data generation
-- **Regulatory moat** — EU AI Act (Aug 2026–27) makes training-data provenance mandatory; our pipeline is identity-free by design
-- **Quality-verified output** — 5-gate evaluation (automated metrics + LLM visual assessment + human review) ensures only usable trajectories enter the dataset
-
-## Demo
-
-```bash
-# Record a 30s video of someone pouring water
-# Run the pipeline (MediaPipe Pose → pinocchio IK → LeRobot)
-python -m robodata.pipeline --input pouring.mp4 --robot franka_panda
-
-# Output: LeRobot dataset ready for policy fine-tuning
-# → outputs/pouring_franka/ (Parquet + MP4, push to HuggingFace Hub)
-```
-
-## Research
-
-- **[Synthesis](docs/synthesis.md)** — Executive decision document (start here)
-- **[MVP Pipeline](docs/mvp-pipeline.md)** — MVP pipeline with hosted APIs (hackathon build plan)
-- **[Regeneration Pipeline](docs/regeneration-pipeline.md)** — Full regeneration architecture
-- **[Current Scene](docs/current-scene.md)** — Data needs, competitive landscape, regulatory backdrop
-- **[Capture Tech](docs/capture-tech.md)** — Consumer device sensor capabilities
-- **[Problem Statement](docs/problem_statement/Physical%20World%20Data%20Layer.md)** — Original problem statement
-- **[Quality Evaluation](docs/quality-evaluation-strategy.md)** — 5-gate evaluation pipeline (automated + LLM + human-in-the-loop)
-
 ## Built For
 
 [Agentic AI Build Week 2026](https://aabw.genaifund.ai) — July 8–12, HCMC, 2500+ builders, $1M+ prize pool
+
+## Frontend
+
+The frontend is currently dependency-free (static HTML/CSS/JS). If package-managed dependencies are introduced later, `bun` is the preferred package manager.
 
 ## License
 

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RoboData — Phone Video → Robot Dataset</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <!-- Login View -->
+    <div id="login-view" class="view active">
+        <div class="login-card">
+            <div class="logo">
+                <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="48" height="48" rx="12" fill="#00d4aa" fill-opacity="0.15"/>
+                    <path d="M14 24l6-8h8l6 8-6 8h-8l-6-8z" stroke="#00d4aa" stroke-width="2" fill="none"/>
+                    <circle cx="24" cy="24" r="3" fill="#00d4aa"/>
+                    <line x1="24" y1="21" x2="24" y2="10" stroke="#00d4aa" stroke-width="1.5" stroke-linecap="round"/>
+                    <line x1="30" y1="18" x2="37" y2="14" stroke="#00d4aa" stroke-width="1.5" stroke-linecap="round"/>
+                    <line x1="18" y1="18" x2="11" y2="14" stroke="#00d4aa" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </div>
+            <h1>RoboData</h1>
+            <p class="subtitle">Phone Video → Robot Dataset</p>
+            <form id="login-form" autocomplete="off">
+                <label for="password-input" class="sr-only">Access Password</label>
+                <input type="password" id="password-input" placeholder="Enter access password" required>
+                <button type="submit" id="login-btn">Authenticate</button>
+            </form>
+            <p id="login-error" class="error-text hidden"></p>
+        </div>
+    </div>
+
+    <!-- Dashboard View -->
+    <div id="dashboard-view" class="view">
+        <header class="dashboard-header">
+            <div class="header-logo">
+                <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="32" height="32" rx="8" fill="#00d4aa" fill-opacity="0.15"/>
+                    <path d="M10 16l4-5.33h5.33L23.33 16 19 21.33H13.67L10 16z" stroke="#00d4aa" stroke-width="1.5" fill="none"/>
+                    <circle cx="16" cy="16" r="2" fill="#00d4aa"/>
+                </svg>
+                <span class="header-title">RoboData</span>
+            </div>
+            <div class="header-meta">
+                <span class="meta-role" id="session-role"></span>
+                <span class="meta-id" id="session-id"></span>
+            </div>
+            <button id="logout-btn" class="btn-secondary">Logout</button>
+        </header>
+
+        <main class="dashboard-main">
+            <!-- Upload Section -->
+            <section class="upload-section">
+                <h2>Upload Video</h2>
+                <div id="upload-zone">
+                    <div class="upload-icon">
+                        <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M24 36V12M24 12l-7 7M24 12l7 7" stroke="#00d4aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M10 28v8a3 3 0 003 3h22a3 3 0 003-3v-8" stroke="#00d4aa" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                    </div>
+                    <p class="upload-text">Drag and drop a video here</p>
+                    <p class="upload-hint">MP4, MOV, AVI, WEBM</p>
+                    <input type="file" id="file-input" accept="video/mp4,video/mov,video/avi,video/webm,.mp4,.mov,.avi,.webm" hidden>
+                    <button id="upload-btn" class="btn-primary">Select File</button>
+                </div>
+                <div id="upload-status" class="upload-status hidden">
+                    <p id="upload-filename"></p>
+                    <div id="upload-spinner" class="spinner hidden"></div>
+                    <button id="upload-submit-btn" class="btn-primary hidden">Upload &amp; Process</button>
+                    <button id="upload-clear-btn" class="btn-secondary hidden">Clear</button>
+                </div>
+            </section>
+
+            <!-- Jobs Section -->
+            <section class="jobs-section">
+                <h2>Pipeline Jobs</h2>
+                <div id="jobs-list">
+                    <div id="jobs-empty" class="jobs-empty">
+                        <p>No jobs yet. Upload a video to get started.</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="dashboard-footer">
+            <p>Built for Agentic AI Build Week 2026</p>
+        </footer>
+    </div>
+
+    <!-- Job Card Template -->
+    <template id="job-template">
+        <div class="job-card" data-job-id="">
+            <div class="job-header">
+                <span class="job-filename"></span>
+                <span class="job-status"></span>
+            </div>
+            <div class="job-stage"></div>
+            <div class="progress-bar">
+                <div class="progress-fill"></div>
+            </div>
+            <div class="progress-label">0%</div>
+            <div class="job-time"></div>
+            <div class="job-actions">
+                <button class="btn-download hidden">⬇ Download Dataset</button>
+                <button class="btn-delete">Delete</button>
+            </div>
+        </div>
+    </template>
+
+    <script src="/app.js"></script>
+</body>
+</html>
