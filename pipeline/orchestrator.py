@@ -176,6 +176,10 @@ async def run_pipeline(
         _callback("failed", 0.92, PipelineStage.FINALIZE, str(exc))
         return {"status": "failed", "stage": PipelineStage.FINALIZE, "error": str(exc)}
 
+    # Downsample joint trajectory for visualization (max 50 points)
+    step = max(1, len(joint_trajectory) // 50)
+    downsampled = joint_trajectory[::step].tolist()
+
     result = {
         "status": "completed",
         "job_id": job_id,
@@ -194,6 +198,7 @@ async def run_pipeline(
         "static_checks": static_checks,
         "ai_review": ai_review_md,
         "ai_review_path": str(ai_review_path),
+        "downsampled_trajectory": downsampled,
     }
 
     _callback("completed", 1.0, PipelineStage.FINALIZE, "Pipeline completed successfully")

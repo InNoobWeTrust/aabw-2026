@@ -89,6 +89,64 @@
         </footer>
     </div>
 
+    <!-- Job Detail Modal -->
+    <div id="job-detail-modal" class="modal-overlay hidden">
+        <div class="modal-container">
+            <div class="modal-header">
+                <div class="modal-header-title">
+                    <h3 id="detail-modal-title">Job Submission Details</h3>
+                </div>
+                <button id="detail-close-btn" class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="detail-left">
+                    <div class="video-container">
+                        <div class="video-block">
+                            <h4>Original Demonstration</h4>
+                            <video id="detail-video-original" playsinline muted></video>
+                        </div>
+                        <div class="video-block">
+                            <h4>Robot Simulation (Pinocchio)</h4>
+                            <video id="detail-video-simulation" playsinline muted></video>
+                        </div>
+                    </div>
+                    <div class="video-controls">
+                        <button id="video-play-btn" class="btn-primary">Play Sync</button>
+                        <span id="video-time-display">0.0s / 0.0s</span>
+                    </div>
+                    <div class="trajectory-chart-container">
+                        <h4>Joint Trajectories Action Path</h4>
+                        <div id="trajectory-chart"></div>
+                    </div>
+                </div>
+                <div class="detail-right">
+                    <div class="info-block">
+                        <h4>Pipeline Stats</h4>
+                        <table class="info-table">
+                            <tbody>
+                                <tr><td>Job ID</td><td id="detail-job-id"></td></tr>
+                                <tr><td>Filename</td><td id="detail-filename"></td></tr>
+                                <tr><td>Status</td><td id="detail-status"></td></tr>
+                                <tr><td>Created At</td><td id="detail-created-at"></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="info-block">
+                        <h4>Static Verification Checks</h4>
+                        <ul id="detail-static-checks" class="checks-list"></ul>
+                    </div>
+                    <div class="info-block">
+                        <h4>AI Robotics Agent Review</h4>
+                        <div id="detail-ai-review" class="markdown-body"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="detail-download-btn" class="btn-primary">⬇ Download Dataset</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Job Card Template -->
     <template id="job-template">
         <div class="job-card" data-job-id="">
@@ -103,6 +161,7 @@
             <div class="progress-label">0%</div>
             <div class="job-time"></div>
             <div class="job-actions">
+                <button class="btn-detail btn-secondary hidden">👁 View Details</button>
                 <button class="btn-download hidden">⬇ Download Dataset</button>
                 <button class="btn-delete">Delete</button>
             </div>

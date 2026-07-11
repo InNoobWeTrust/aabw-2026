@@ -12,7 +12,7 @@ from typing import Annotated
 from uuid import uuid4
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 
 from backend.config import settings
@@ -189,6 +189,36 @@ def require_authenticated_identity(
         The caller's SessionIdentity.
     """
     return identity
+
+
+def require_authenticated_identity_optional_query(
+    request: Request,
+) -> SessionIdentity:
+    """FastAPI dependency: require any valid authenticated identity, allowing query param token.
+
+    Useful for media streams where custom headers cannot be sent (e.g. video tags).
+    """
+    from fastapi.security.utils import get_authorization_scheme_param
+
+    # Check Authorization header first
+    authorization = request.headers.get("Authorization")
+    if authorization:
+        scheme, token = get_authorization_scheme_param(authorization)
+        if scheme.lower() == "bearer":
+            payload = _decode_token(token)
+            return _parse_identity(payload)
+
+    # Check query parameter next
+    token = request.query_params.get("token")
+    if token:
+        payload = _decode_token(token)
+        return _parse_identity(payload)
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def require_admin_identity(

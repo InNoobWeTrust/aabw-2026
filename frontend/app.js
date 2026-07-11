@@ -314,6 +314,16 @@ function populateJobCard(card, job) {
 
     card.querySelector(".job-time").textContent = `Started: ${formatTime(job.created_at)}`;
 
+    const detailBtn = card.querySelector(".btn-detail");
+    if (detailBtn) {
+        if (status === "completed" || status === "failed") {
+            detailBtn.classList.remove("hidden");
+            detailBtn.onclick = () => openJobDetails(job.job_id);
+        } else {
+            detailBtn.classList.add("hidden");
+        }
+    }
+
     const downloadBtn = card.querySelector(".btn-download");
     if (status === "completed") {
         downloadBtn.classList.remove("hidden");
@@ -526,6 +536,24 @@ async function init() {
 
     document.getElementById("logout-btn").addEventListener("click", logout);
 
+    document.getElementById("detail-close-btn").addEventListener("click", () => {
+        document.getElementById("job-detail-modal").classList.add("hidden");
+        const originalVideo = document.getElementById("detail-video-original");
+        const simVideo = document.getElementById("detail-video-simulation");
+        originalVideo.pause();
+        simVideo.pause();
+    });
+
+    document.getElementById("job-detail-modal").addEventListener("click", (e) => {
+        if (e.target.id === "job-detail-modal") {
+            document.getElementById("job-detail-modal").classList.add("hidden");
+            const originalVideo = document.getElementById("detail-video-original");
+            const simVideo = document.getElementById("detail-video-simulation");
+            originalVideo.pause();
+            simVideo.pause();
+        }
+    });
+
     initDragDrop();
 
     const valid = await verifyToken();
@@ -557,3 +585,318 @@ async function onAuthSuccess() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+
+/* ------------------------------------------------------------------ */
+/* Detail Modal & Visualizations */
+/* ------------------------------------------------------------------ */
+
+function parseMarkdown(md) {
+    if (!md) return "";
+    const lines = md.split("\n");
+    let html = "";
+    let inList = false;
+    let inTable = false;
+    let tableHeaderParsed = false;
+
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i].trim();
+
+        // Handle Table
+        if (line.startsWith("|")) {
+            if (inList) {
+                html += "</ul>";
+                inList = false;
+            }
+            if (!inTable) {
+                html += "<table>";
+                inTable = true;
+                tableHeaderParsed = false;
+            }
+            const cells = line.split("|").slice(1, -1).map(c => c.trim());
+            if (cells.every(c => /^:?-+:?$/.test(c))) {
+                continue; // Skip divider row
+            }
+            html += "<tr>";
+            cells.forEach(cell => {
+                if (!tableHeaderParsed) {
+                    html += `<th>${cell}</th>`;
+                } else {
+                    html += `<td>${cell}</td>`;
+                }
+            });
+            html += "</tr>";
+            tableHeaderParsed = true;
+            continue;
+        } else if (inTable) {
+            html += "</table>";
+            inTable = false;
+        }
+
+        // Handle Headings
+        if (line.startsWith("#")) {
+            if (inList) {
+                html += "</ul>";
+                inList = false;
+            }
+            const level = line.match(/^#+/)[0].length;
+            const text = line.replace(/^#+\s*/, "");
+            html += `<h${level}>${text}</h${level}>`;
+            continue;
+        }
+
+        // Handle Horizontal Rule
+        if (line === "---") {
+            if (inList) {
+                html += "</ul>";
+                inList = false;
+            }
+            html += "<hr>";
+            continue;
+        }
+
+        // Handle Lists
+        if (line.startsWith("- ")) {
+            if (!inList) {
+                html += "<ul>";
+                inList = true;
+            }
+            const text = line.substring(2);
+            html += `<li>${text}</li>`;
+            continue;
+        } else if (inList) {
+            html += "</ul>";
+            inList = false;
+        }
+
+        // Handle paragraphs
+        if (line !== "") {
+            html += `<p>${line}</p>`;
+        }
+    }
+
+    if (inList) html += "</ul>";
+    if (inTable) html += "</table>";
+
+    // Handle inline bold formatting
+    html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+
+    return html;
+}
+
+function drawTrajectoryChart(trajectory) {
+    const container = document.getElementById("trajectory-chart");
+    if (!container) return;
+
+    if (!trajectory || trajectory.length === 0) {
+        container.innerHTML = `<div class="jobs-empty">No trajectory data available</div>`;
+        return;
+    }
+
+    const width = container.clientWidth || 450;
+    const height = container.clientHeight || 200;
+
+    const padding = { top: 15, right: 15, bottom: 25, left: 35 };
+    const chartWidth = width - padding.left - padding.right;
+    const chartHeight = height - padding.top - padding.bottom;
+
+    let yMin = -Math.PI;
+    let yMax = Math.PI;
+
+    trajectory.forEach(pt => {
+        pt.forEach(val => {
+            if (val < yMin) yMin = val;
+            if (val > yMax) yMax = val;
+        });
+    });
+    const yRange = yMax - yMin;
+    yMin -= yRange * 0.05;
+    yMax += yRange * 0.05;
+
+    const xMax = trajectory.length - 1;
+
+    const getX = (index) => padding.left + (index / xMax) * chartWidth;
+    const getY = (val) => padding.top + chartHeight - ((val - yMin) / (yMax - yMin)) * chartHeight;
+
+    const colors = [
+        "#38bdf8", // Sky blue
+        "#f43f5e", // Rose
+        "#34d399", // Emerald
+        "#fbbf24", // Amber
+        "#a78bfa", // Purple
+        "#fb7185", // Pink
+        "#2dd4bf"  // Teal
+    ];
+
+    let svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
+
+    // Grid lines and ticks
+    const yTicks = 5;
+    for (let i = 0; i < yTicks; i++) {
+        const val = yMin + (i / (yTicks - 1)) * (yMax - yMin);
+        const y = getY(val);
+        svg += `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="#334155" stroke-dasharray="2,4" />`;
+        svg += `<text x="${padding.left - 8}" y="${y + 4}" fill="#94a3b8" font-size="9" text-anchor="end" font-family="monospace">${val.toFixed(1)}</text>`;
+    }
+
+    const xTicks = 5;
+    for (let i = 0; i < xTicks; i++) {
+        const pct = i / (xTicks - 1);
+        const idx = Math.round(pct * xMax);
+        const x = getX(idx);
+        svg += `<line x1="${x}" y1="${padding.top}" x2="${x}" y2="${height - padding.bottom}" stroke="#334155" stroke-dasharray="2,4" />`;
+        svg += `<text x="${x}" y="${height - padding.bottom + 15}" fill="#94a3b8" font-size="9" text-anchor="middle" font-family="monospace">${(idx * 0.1).toFixed(1)}s</text>`;
+    }
+
+    // Plot lines
+    for (let j = 0; j < 7; j++) {
+        let pathData = "";
+        trajectory.forEach((pt, i) => {
+            const val = pt[j];
+            const x = getX(i);
+            const y = getY(val);
+            if (i === 0) {
+                pathData += `M ${x} ${y}`;
+            } else {
+                pathData += ` L ${x} ${y}`;
+            }
+        });
+        svg += `<path d="${pathData}" fill="none" stroke="${colors[j]}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />`;
+    }
+
+    svg += `</svg>`;
+    container.innerHTML = svg;
+}
+
+function initVideoSync() {
+    const originalVideo = document.getElementById("detail-video-original");
+    const simVideo = document.getElementById("detail-video-simulation");
+    const playBtn = document.getElementById("video-play-btn");
+    const timeDisplay = document.getElementById("video-time-display");
+
+    let isPlaying = false;
+
+    playBtn.textContent = "Play Sync";
+    originalVideo.pause();
+    simVideo.pause();
+
+    playBtn.onclick = () => {
+        if (isPlaying) {
+            originalVideo.pause();
+            simVideo.pause();
+            playBtn.textContent = "Play Sync";
+            isPlaying = false;
+        } else {
+            const diff = Math.abs(originalVideo.currentTime - simVideo.currentTime);
+            if (diff > 0.15) {
+                simVideo.currentTime = originalVideo.currentTime;
+            }
+            originalVideo.play().catch(() => {});
+            simVideo.play().catch(() => {});
+            playBtn.textContent = "Pause Sync";
+            isPlaying = true;
+        }
+    };
+
+    originalVideo.onplay = () => {
+        if (simVideo.paused) simVideo.play().catch(() => {});
+        playBtn.textContent = "Pause Sync";
+        isPlaying = true;
+    };
+    originalVideo.onpause = () => {
+        if (!simVideo.paused) simVideo.pause();
+        playBtn.textContent = "Play Sync";
+        isPlaying = false;
+    };
+    originalVideo.onseeked = () => {
+        simVideo.currentTime = originalVideo.currentTime;
+    };
+
+    const updateTime = () => {
+        const cur = originalVideo.currentTime.toFixed(1);
+        const dur = originalVideo.duration ? originalVideo.duration.toFixed(1) : "0.0";
+        timeDisplay.textContent = `${cur}s / ${dur}s`;
+    };
+
+    originalVideo.ontimeupdate = updateTime;
+    originalVideo.onloadedmetadata = updateTime;
+}
+
+async function openJobDetails(jobId) {
+    const modal = document.getElementById("job-detail-modal");
+    const originalVideo = document.getElementById("detail-video-original");
+    const simVideo = document.getElementById("detail-video-simulation");
+
+    originalVideo.src = "";
+    simVideo.src = "";
+    originalVideo.load();
+    simVideo.load();
+
+    try {
+        const job = await fetchJob(jobId);
+
+        document.getElementById("detail-job-id").textContent = job.job_id;
+        document.getElementById("detail-filename").textContent = job.filename;
+        document.getElementById("detail-status").textContent = getStatusLabel(job.status);
+        document.getElementById("detail-created-at").textContent = formatTime(job.created_at);
+
+        modal.classList.remove("hidden");
+
+        const token = getToken();
+        originalVideo.src = `/api/jobs/${job.job_id}/video/original?token=${token}`;
+
+        if (job.status === "completed" && job.result) {
+            simVideo.src = `/api/jobs/${job.job_id}/video/simulation?token=${token}`;
+
+            // Render static checks
+            const checksList = document.getElementById("detail-static-checks");
+            checksList.innerHTML = "";
+            const checksData = job.result.static_checks || {};
+            const checksArray = checksData.checks || [];
+            if (checksArray.length > 0) {
+                checksArray.forEach(c => {
+                    const li = document.createElement("li");
+                    li.className = c.passed ? "passed" : "failed";
+                    li.innerHTML = `
+                        <span class="checks-list-icon">${c.passed ? "✅" : "❌"}</span>
+                        <div class="checks-list-details">
+                            <span class="checks-list-name">${c.name}</span>
+                            <span class="checks-list-desc">${c.details}</span>
+                        </div>
+                    `;
+                    checksList.appendChild(li);
+                });
+            } else {
+                checksList.innerHTML = `<li>No static checks run yet</li>`;
+            }
+
+            // Render AI Review
+            const aiReviewEl = document.getElementById("detail-ai-review");
+            aiReviewEl.innerHTML = parseMarkdown(job.result.ai_review || "");
+
+            // Render Trajectory Chart
+            setTimeout(() => {
+                drawTrajectoryChart(job.result.downsampled_trajectory || []);
+            }, 100);
+
+            // Hook download button
+            document.getElementById("detail-download-btn").onclick = () => {
+                downloadDataset(job.job_id, job.filename);
+            };
+            document.getElementById("detail-download-btn").classList.remove("hidden");
+        } else {
+            document.getElementById("detail-static-checks").innerHTML = `<li>Job not completed</li>`;
+            if (job.status === "failed" && job.message) {
+                document.getElementById("detail-ai-review").innerHTML = `<p class="status-failed" style="padding: 0.5rem; border-radius: 4px;">Job Failed: ${job.message}</p>`;
+            } else {
+                document.getElementById("detail-ai-review").innerHTML = `<p>Review report is generated once job is completed.</p>`;
+            }
+            document.getElementById("trajectory-chart").innerHTML = `<div class="jobs-empty">Chart is only available for completed jobs</div>`;
+            document.getElementById("detail-download-btn").classList.add("hidden");
+        }
+
+        initVideoSync();
+    } catch (err) {
+        showToast(err.message || "Failed to fetch job details", "error");
+    }
+}

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.auth import (
     _decode_token,
@@ -17,6 +17,7 @@ from backend.auth import (
     oauth2_scheme,
     require_admin_identity,
     require_authenticated_identity,
+    require_authenticated_identity_optional_query,
 )
 from backend.config import settings
 from backend.job_store import FileSystemJobStore
@@ -307,6 +308,11 @@ async def _run_pipeline(job_id: str) -> None:
         ai_review_path = out / "ai_review.md"
         ai_review_path.write_text(ai_review_md, encoding="utf-8")
 
+        # Downsample joint trajectory for visualization (max 50 points)
+        traj = retarget_result["joint_trajectory"]
+        step = max(1, len(traj) // 50)
+        downsampled = traj[::step].tolist()
+
         result_payload = {
             "evaluation": eval_result,
             "package": pkg_result,
@@ -315,6 +321,7 @@ async def _run_pipeline(job_id: str) -> None:
             "static_checks": static_checks,
             "ai_review": ai_review_md,
             "ai_review_path": str(ai_review_path),
+            "downsampled_trajectory": downsampled,
         }
         _update_job(
             job_id,
@@ -450,6 +457,57 @@ def get_job(job_id: str, identity: SessionIdentity = Depends(require_authenticat
     if not _can_access_job(identity, snapshot):
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return _snapshot_to_response(snapshot)
+
+
+@router.get("/jobs/{job_id}/video/original")
+def get_original_video(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity_optional_query),
+):
+    """Stream/serve the original uploaded video file."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    video_path = Path(snapshot.upload_path)
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Original video file not found")
+
+    return FileResponse(str(video_path))
+
+
+@router.get("/jobs/{job_id}/video/simulation")
+def get_simulation_video(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity_optional_query),
+):
+    """Stream/serve the rendered simulation video file."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    if snapshot.status != JobStatus.COMPLETED:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Simulation video only available for completed jobs "
+                f"(current status: {snapshot.status.value})"
+            ),
+        )
+
+    sim_path = Path(snapshot.output_dir) / "simulation.mp4"
+    if not sim_path.exists():
+        raise HTTPException(status_code=404, detail="Simulation video not found")
+
+    return FileResponse(str(sim_path))
 
 
 @router.get("/jobs/{job_id}/download")
