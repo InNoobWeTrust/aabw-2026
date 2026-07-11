@@ -203,7 +203,7 @@ export default function VideoInspector({
               ref={focusedVideo === "original" ? originalRef : focusedVideo === "overlay" ? overlayRef : focusedVideo === "preview" ? previewRef : simulationRef}
               src={getUrl(focusedVideo === "simulation" ? "simulation" : focusedVideo === "overlay" ? "skeleton-overlay" : focusedVideo === "preview" ? "skeleton-preview" : "original")}
               className="w-full rounded-lg bg-slate-900 object-contain shadow-2xl"
-              style={{ maxHeight: "400px" }}
+              style={{ maxHeight: "560px" }}
               playsInline
               muted
               onTimeUpdate={focusedVideo === "original" ? handleVideoTimeUpdate : undefined}
@@ -233,7 +233,7 @@ export default function VideoInspector({
                   ref={originalRef}
                   src={getUrl("original")}
                   className="w-full rounded-lg border border-slate-900 bg-slate-900 object-contain"
-                  style={{ maxHeight: activeTab === "grid" ? "170px" : "320px" }}
+                  style={{ maxHeight: activeTab === "grid" ? "240px" : "420px" }}
                   playsInline
                   muted
                   onTimeUpdate={handleVideoTimeUpdate}
@@ -264,7 +264,7 @@ export default function VideoInspector({
                     src={getUrl("skeleton-overlay")}
                     onError={() => handleVideoError("overlay")}
                     className="w-full rounded-lg border border-slate-900 bg-slate-900 object-contain"
-                    style={{ maxHeight: activeTab === "grid" ? "170px" : "320px" }}
+                    style={{ maxHeight: activeTab === "grid" ? "240px" : "420px" }}
                     playsInline
                     muted
                   />
@@ -288,7 +288,7 @@ export default function VideoInspector({
                   src={getUrl("skeleton-preview")}
                   onError={() => handleVideoError("preview")}
                   className="w-full rounded-lg border border-slate-900 bg-slate-900 object-contain"
-                  style={{ maxHeight: "170px" }}
+                  style={{ maxHeight: "240px" }}
                   playsInline
                   muted
                 />
@@ -314,7 +314,7 @@ export default function VideoInspector({
                     src={getUrl("simulation")}
                     onError={() => handleVideoError("simulation")}
                     className="w-full rounded-lg border border-slate-900 bg-slate-900 object-contain"
-                    style={{ maxHeight: activeTab === "grid" ? "170px" : "320px" }}
+                    style={{ maxHeight: activeTab === "grid" ? "240px" : "420px" }}
                     playsInline
                     muted
                   />

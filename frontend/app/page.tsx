@@ -531,7 +531,7 @@ export default function Home() {
             </div>
 
             {/* Modal Scrollable Body */}
-            <div className="grid flex-1 grid-cols-[1.3fr_1fr] gap-6 overflow-y-auto p-6">
+            <div className="grid flex-1 grid-cols-1 lg:grid-cols-[2.7fr_1.3fr] gap-6 overflow-y-auto p-6">
               {/* Left Column: Media & Charts */}
               <div className="flex flex-col gap-4 min-w-0">
                 <VideoInspector
