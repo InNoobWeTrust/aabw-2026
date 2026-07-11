@@ -46,7 +46,88 @@ uv run uvicorn backend.server:app --host 0.0.0.0 --reload --port 8000
 
 # Run tests
 uv run pytest -v
+
+# Generate a synthetic upload sample
+make example-video
+
+# Prepare a real recorded/public clip for upload
+make prepare-real-video INPUT=/path/to/source.mp4
 ```
+
+## Example Videos for Testing
+
+### 1. Synthetic sample (easy smoke test)
+
+Generate a known-good MP4 locally:
+
+```bash
+make example-video
+```
+
+This writes:
+
+```text
+data/examples/example_test_video.mp4
+```
+
+Use this for:
+- upload testing
+- queue / status / download flow testing
+- quick end-to-end smoke tests
+
+This clip is **not** a valid manipulation demo for real robot training quality evaluation — it is only a synthetic pattern video.
+
+### 2. Real valid manipulation sample (recommended)
+
+The best real test input is a short phone recording you make yourself, because it matches the expected training-data format more closely than stock footage.
+
+**Recommended capture recipe**
+- 5–15 seconds
+- `.mp4` preferred
+- 30 fps
+- landscape orientation
+- one person only
+- full upper body, arms, hands, table, and manipulated object visible
+- stable camera (tripod or fixed phone)
+- one continuous manipulation task
+- plain background if possible
+
+**Good tasks**
+- pick up a cup and place it elsewhere
+- stack 2–3 blocks
+- open a drawer and place an item inside
+- move an object from left to right across a table
+- pour beans or rice from one container into another
+
+**Avoid**
+- fast camera motion
+- heavy occlusion of hands
+- multiple people in frame
+- vertical video if possible
+- jump cuts / edited clips
+- extreme wide shots where the person is tiny in frame
+
+If you already have a real clip — either self-recorded or downloaded from a public source — convert it into a browser-safe MP4 like this:
+
+```bash
+make prepare-real-video INPUT=/path/to/source.mp4
+```
+
+This writes:
+
+```text
+data/examples/real_capture_prepared.mp4
+```
+
+### 3. Public source ideas for real clips
+
+If you do not want to self-record, start from a free public clip source and then run `make prepare-real-video` on the downloaded file.
+
+Examples:
+- Pexels search: https://www.pexels.com/search/videos/pick%20and%20place/
+- Pexels search: https://www.pexels.com/search/videos/pouring%20coffee/
+
+When choosing a clip, prefer one that satisfies the capture recipe above.
 
 ## Environment Variables
 

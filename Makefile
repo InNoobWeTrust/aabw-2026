@@ -1,9 +1,13 @@
 .PHONY: help lock sync fix format lint quality test check dev dev-up doctor \
-        build docker-run docker-update docker-stop docker-logs docker-nuke
+        build docker-run docker-update docker-stop docker-logs docker-nuke \
+        example-video prepare-real-video
 
 CONTAINER_NAME := robodata
 IMAGE_NAME     := robodata:latest
 DATA_VOLUME    := $(PWD)/data
+EXAMPLE_DIR    := $(DATA_VOLUME)/examples
+EXAMPLE_VIDEO  := $(EXAMPLE_DIR)/example_test_video.mp4
+REAL_VIDEO     := $(EXAMPLE_DIR)/real_capture_prepared.mp4
 
 help:  ## Print target descriptions
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -45,6 +49,21 @@ dev-up:  ## Bootstrap dev environment from scratch
 
 doctor:  ## Verify the FastAPI app imports cleanly
 	uv run python -c "from backend.server import app; print(f'OK: {app.title} v{app.version}')"
+
+example-video:  ## Generate a synthetic MP4 sample for upload testing
+	@mkdir -p "$(EXAMPLE_DIR)"
+	ffmpeg -y -f lavfi -i "testsrc=duration=5:size=640x480:rate=30" \
+		-f lavfi -i "sine=frequency=440:duration=5" \
+		-c:v libx264 -pix_fmt yuv420p -shortest "$(EXAMPLE_VIDEO)"
+	@printf "Wrote synthetic sample: %s\n" "$(EXAMPLE_VIDEO)"
+
+prepare-real-video:  ## Transcode a real recorded clip: make prepare-real-video INPUT=/path/to/source.mp4
+	@test -n "$(INPUT)" || (printf "Usage: make prepare-real-video INPUT=/path/to/source.mp4\n" && exit 1)
+	@mkdir -p "$(EXAMPLE_DIR)"
+	ffmpeg -y -i "$(INPUT)" \
+		-vf "fps=30,scale='min(1280,iw)':-2:flags=lanczos" \
+		-c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart "$(REAL_VIDEO)"
+	@printf "Wrote prepared real sample: %s\n" "$(REAL_VIDEO)"
 
 build:  ## Build production Docker image
 	docker build -t $(IMAGE_NAME) .
