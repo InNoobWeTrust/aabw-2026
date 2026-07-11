@@ -18,7 +18,12 @@ build/
 .idea/
 .vscode/
 data/*
-!data/.gitkeep
+!data/jobs/
+data/jobs/*
+!data/jobs/.gitkeep
+!data/queue/
+data/queue/*
+!data/queue/.gitkeep
 uploads/*
 !uploads/.gitkeep
 outputs/*

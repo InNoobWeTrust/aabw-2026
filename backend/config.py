@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    log_level: str = "INFO"
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
@@ -47,6 +49,11 @@ class Settings(BaseSettings):
     def jobs_dir(self) -> Path:
         """Root directory for per-job data under data/jobs/."""
         return self.data_dir / "jobs"
+
+    @property
+    def queue_dir(self) -> Path:
+        """Persisted FIFO queue directory under data/queue/."""
+        return self.data_dir / "queue"
 
     @property
     def effective_judge_password(self) -> str:
