@@ -10,6 +10,8 @@ FastAPI application layer for RoboData. Serves HTTP endpoints, handles authentic
 - **`job_store.py`** — `FileSystemJobStore`: filesystem-persisted job store under `data/jobs/<job_id>/`. This is the **only** module permitted to read or write job directories, `job.json`, and `events.jsonl`. All other modules must go through it for job state access.
 - **`models.py`** — HTTP boundary models (request/response schemas). Delegates canonical types to `domain/`.
 - **`server.py`** — App factory, CORS, static file serving, startup directory initialization.
+- **`llm_client.py`** — Shared OpenAI SDK-backed adapter for OpenAI-compatible provider calls used by review, calibration, assistant, and probe flows.
+- **`llm_probe.py`** — Standalone CLI utility for validating OpenAI-compatible LLM credentials, base URL, model selection, and provider responses without running a full pipeline job.
 
 ## Rules
 

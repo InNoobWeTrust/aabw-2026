@@ -1,6 +1,6 @@
 .PHONY: help lock sync fix format lint quality test check dev dev-up doctor \
         build docker-run docker-update docker-stop docker-logs docker-nuke \
-        example-video prepare-real-video
+        example-video prepare-real-video llm-probe
 
 CONTAINER_NAME := robodata
 IMAGE_NAME     := robodata:latest
@@ -49,6 +49,9 @@ dev-up:  ## Bootstrap dev environment from scratch
 
 doctor:  ## Verify the FastAPI app imports cleanly
 	uv run python -c "from backend.server import app; print(f'OK: {app.title} v{app.version}')"
+
+llm-probe:  ## Probe configured OpenAI-compatible LLM endpoint
+	uv run python -m backend.llm_probe
 
 example-video:  ## Generate a synthetic MP4 sample for upload testing
 	@mkdir -p "$(EXAMPLE_DIR)"

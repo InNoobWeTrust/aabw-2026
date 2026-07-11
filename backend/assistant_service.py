@@ -19,11 +19,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from backend.assistant_store import FileSystemAssistantStore
 from backend.config import settings
 from backend.job_store import FileSystemJobStore
+from backend.llm_client import request_chat_json
 from backend.review_store import FileSystemReviewStore
 from domain.enums import AssistantMessageRole, AssistantSessionStatus, ReviewStage
 from domain.reviews import AssistantEvent, AssistantMessage, AssistantSessionSnapshot
@@ -227,7 +226,7 @@ class ReviewAssistantService:
     ) -> dict[str, Any]:
         """Use a direct OpenAI-compatible provider call to choose the next action."""
         prompt = self._build_assistant_prompt(job_id, transcript)
-        return await _call_openai_compatible_json(
+        return await request_chat_json(
             system_message="You are a robotics review assistant. Return strict JSON only.",
             prompt=prompt,
         )
@@ -380,41 +379,3 @@ def _chunk_text(text: str, width: int) -> list[str]:
     if width <= 0:
         return [text]
     return [text[i : i + width] for i in range(0, len(text), width)] or [""]
-
-
-async def _call_openai_compatible_json(
-    *,
-    system_message: str,
-    prompt: str,
-) -> dict[str, Any]:
-    """Call an OpenAI-compatible chat-completions endpoint and parse strict JSON."""
-    api_key = settings.effective_llm_api_key
-    if not api_key:
-        raise RuntimeError("llm_provider_not_configured")
-
-    body = {
-        "model": settings.review_model_name,
-        "messages": [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-    }
-    async with httpx.AsyncClient(timeout=settings.review_timeout_seconds) as client:
-        response = await client.post(
-            f"{settings.effective_llm_base_url}/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-        )
-        response.raise_for_status()
-        raw = response.json()
-
-    message = raw["choices"][0]["message"]["content"]
-    if isinstance(message, list):
-        text_parts = [part.get("text", "") for part in message if isinstance(part, dict)]
-        message = "".join(text_parts)
-    return json.loads(message)

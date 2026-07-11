@@ -86,9 +86,7 @@ def test_mapping_calibration_factory_returns_rerun_profile_for_salvageable_motio
     assert payload["risks"]
 
 
-def test_mapping_calibration_factory_returns_skeleton_only_when_robot_branch_is_not_salvageable() -> (
-    None
-):
+def test_mapping_calibration_factory_returns_skeleton_only_for_unstable_robot_branch() -> None:
     """Severely unstable robot mapping with usable pose should downgrade to skeleton_only."""
     context = {
         "pose_metrics": {
