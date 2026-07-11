@@ -53,6 +53,7 @@ from domain.enums import AssistantSessionStatus, JobStatus, PipelineStage, Revie
 from domain.jobs import JobEvent, JobOwner, JobSnapshot
 from domain.mapping import MappingProfile
 from domain.reviews import AssistantMessage, AssistantSessionSnapshot, ReviewSnapshot
+from pipeline.calibration_samples import generate_mapping_context_samples
 from pipeline.evaluate import evaluate_trajectory
 from pipeline.package import package_lerobot, package_lerobot_skeleton
 from pipeline.pose import extract_pose_from_video
@@ -555,6 +556,18 @@ async def _run_pipeline(job_id: str) -> None:
         _update_job(
             job_id, JobStatus.RUNNING, 0.96, PipelineStage.FINALIZE, "Finalizing artifacts..."
         )
+        calibration_dir = out / "calibration"
+        mapping_context_samples = await loop.run_in_executor(
+            None,
+            lambda: generate_mapping_context_samples(
+                original_video_path=video_path,
+                skeleton_overlay_video_path=skeleton_overlay_path,
+                skeleton_preview_video_path=skeleton_preview_path,
+                robot_simulation_video_path=sim_video_path,
+                calibration_dir=calibration_dir,
+                requested_sample_count=8,
+            ),
+        )
         static_checks = run_static_checks(robot_dataset_dir)
 
         traj = retarget_result["joint_trajectory"]
@@ -584,6 +597,9 @@ async def _run_pipeline(job_id: str) -> None:
                 "dataset": robot_pkg_result,
                 "mapping_profile": retarget_result["mapping_profile"],
                 "review": {"status": "pending", "verdict": None},
+            },
+            "calibration": {
+                "mapping_context_samples": mapping_context_samples,
             },
             "static_checks": static_checks,
             "downsampled_trajectory": downsampled,

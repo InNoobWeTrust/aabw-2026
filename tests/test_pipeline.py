@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import cv2
 import numpy as np
 import pandas as pd
 
@@ -216,3 +219,109 @@ def test_generate_pose_review() -> None:
 
     assert "Pose Extraction Review Report" in markdown
     assert payload["verdict"] == "approved"
+
+
+def _write_test_video(path: Path, frame_count: int, seed: int) -> None:
+    """Write a deterministic small MP4 test video with visible per-frame variation."""
+    writer = cv2.VideoWriter(
+        str(path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        10,
+        (96, 72),
+    )
+    assert writer.isOpened(), f"Failed to open test video writer for {path}"
+
+    try:
+        for frame_idx in range(frame_count):
+            frame = np.zeros((72, 96, 3), dtype=np.uint8)
+            frame[:, :] = (
+                (seed * 31 + frame_idx * 7) % 255,
+                (seed * 47 + frame_idx * 11) % 255,
+                (seed * 59 + frame_idx * 13) % 255,
+            )
+            cv2.putText(
+                frame,
+                f"{seed}:{frame_idx}",
+                (5, 38),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            writer.write(frame)
+    finally:
+        writer.release()
+
+
+def test_generate_mapping_context_samples_creates_synchronized_evidence_pack(tmp_path) -> None:
+    """Calibration samples should use one shared frame index set across all four videos."""
+    from pipeline.calibration_samples import generate_mapping_context_samples
+
+    original = tmp_path / "original.mp4"
+    overlay = tmp_path / "overlay.mp4"
+    preview = tmp_path / "preview.mp4"
+    simulation = tmp_path / "simulation.mp4"
+    calibration_dir = tmp_path / "calibration"
+
+    _write_test_video(original, frame_count=10, seed=1)
+    _write_test_video(overlay, frame_count=10, seed=2)
+    _write_test_video(preview, frame_count=10, seed=3)
+    _write_test_video(simulation, frame_count=10, seed=4)
+
+    manifest = generate_mapping_context_samples(
+        original_video_path=original,
+        skeleton_overlay_video_path=overlay,
+        skeleton_preview_video_path=preview,
+        robot_simulation_video_path=simulation,
+        calibration_dir=calibration_dir,
+        requested_sample_count=8,
+    )
+
+    assert manifest["sample_count"] == 8
+    assert manifest["json_path"] == str(calibration_dir / "mapping_context_samples.json")
+    assert (calibration_dir / "mapping_context_samples.json").exists()
+    assert len(manifest["samples"]) == 8
+
+    frame_indices = [sample["frame_index"] for sample in manifest["samples"]]
+    assert frame_indices == sorted(frame_indices)
+    assert len(set(frame_indices)) == len(frame_indices)
+    assert frame_indices[0] == 0
+    assert frame_indices[-1] == 9
+
+    for sample in manifest["samples"]:
+        assert set(sample["artifacts"]) == {"original", "overlay", "preview", "robot_simulation"}
+        for artifact in sample["artifacts"].values():
+            assert artifact["frame_index"] == sample["frame_index"]
+            assert Path(artifact["image_path"]).exists()
+            assert artifact["width"] == 96
+            assert artifact["height"] == 72
+
+
+def test_generate_mapping_context_samples_uses_shortest_video_length(tmp_path) -> None:
+    """Synchronized sampling should clamp to the shortest available evidence video."""
+    from pipeline.calibration_samples import generate_mapping_context_samples
+
+    original = tmp_path / "original.mp4"
+    overlay = tmp_path / "overlay.mp4"
+    preview = tmp_path / "preview.mp4"
+    simulation = tmp_path / "simulation.mp4"
+
+    _write_test_video(original, frame_count=12, seed=1)
+    _write_test_video(overlay, frame_count=12, seed=2)
+    _write_test_video(preview, frame_count=6, seed=3)
+    _write_test_video(simulation, frame_count=12, seed=4)
+
+    manifest = generate_mapping_context_samples(
+        original_video_path=original,
+        skeleton_overlay_video_path=overlay,
+        skeleton_preview_video_path=preview,
+        robot_simulation_video_path=simulation,
+        calibration_dir=tmp_path / "calibration",
+        requested_sample_count=8,
+    )
+
+    frame_indices = [sample["frame_index"] for sample in manifest["samples"]]
+    assert manifest["sample_count"] == 6
+    assert frame_indices[0] == 0
+    assert frame_indices[-1] == 5

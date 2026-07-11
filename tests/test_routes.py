@@ -340,6 +340,13 @@ def test_job_result_includes_mapping_profile(client, tmp_path, monkeypatch):
                     "depth_scale": 1.0,
                 },
             },
+            "calibration": {
+                "mapping_context_samples": {
+                    "sample_count": 2,
+                    "json_path": "/tmp/mapping_context_samples.json",
+                    "samples": [],
+                }
+            },
         },
     )
     (job_dir / "job.json").write_text(snapshot.model_dump_json(by_alias=True))
@@ -357,3 +364,4 @@ def test_job_result_includes_mapping_profile(client, tmp_path, monkeypatch):
     assert "retarget" in body["result"]
     assert "mapping_profile" in body["result"]["retarget"]
     assert body["result"]["retarget"]["mapping_profile"]["profile_version"] == 1
+    assert body["result"]["calibration"]["mapping_context_samples"]["sample_count"] == 2
