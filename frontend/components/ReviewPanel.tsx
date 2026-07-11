@@ -26,6 +26,7 @@ export default function ReviewPanel({
   const [verdict, setVerdict] = useState<string | null>(null);
   const [markdown, setMarkdown] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string[]>([]);
   const bodyRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -42,6 +43,7 @@ export default function ReviewPanel({
     setVerdict(null);
     setMarkdown("");
     setError(null);
+    setProgress([]);
     closeStream();
 
     if (reviewInfo) {
@@ -119,6 +121,21 @@ export default function ReviewPanel({
         setStatus(payload.status || "running");
       } catch {
         setStatus("running");
+      }
+    });
+
+    // Live agent reasoning trace: the local review path now emits one "progress"
+    // event per agent step ("🧠 Agent: detecting handedness..."). We append
+    // each message so the user sees the agent actually working.
+    source.addEventListener("progress", (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        const message = String(payload.message || "").trim();
+        if (message) {
+          setProgress((prev) => [...prev, message]);
+        }
+      } catch {
+        // ignore malformed progress events
       }
     });
 
@@ -293,6 +310,19 @@ export default function ReviewPanel({
           {getVerdictBadge(verdict)}
         </div>
       </div>
+
+      {/* Live agent reasoning trace — only visible while the review is running
+          and the backend has emitted at least one progress event. */}
+      {status === "running" && progress.length > 0 && (
+        <div className="flex flex-col gap-1 rounded-lg border border-sky-500/20 bg-sky-500/5 p-2.5 text-[11px] text-sky-300">
+          {progress.slice(-4).map((line, idx) => (
+            <div key={`${idx}-${line}`} className="flex items-center gap-1.5">
+              <span className="h-1 w-1 rounded-full bg-sky-400/70" />
+              <span className="font-mono">{line}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Body Report */}
       <div

@@ -16,14 +16,17 @@ async def test_review_service_uses_local_fallback_by_default(tmp_path, monkeypat
     store = FileSystemReviewStore(tmp_path)
     service = ReviewService(store)
 
+    monkeypatch.setattr(settings, "llm_api_key", None)
     monkeypatch.setattr(settings, "featherless_api_key", None)
-    monkeypatch.setattr(settings, "daytona_api_key", None)
+
+    def builder(_emit):
+        return lambda: ("# Local Review", {"verdict": "approved", "summary": "ok"})
 
     service.schedule_review(
         job_id="job-local",
         stage=ReviewStage.POSE,
         context_manifest={"metrics": {"detection_rate": 1.0}},
-        review_factory=lambda: ("# Local Review", {"verdict": "approved", "summary": "ok"}),
+        review_factory_builder=builder,
     )
 
     await service._tasks[("job-local", ReviewStage.POSE.value)]
@@ -35,12 +38,13 @@ async def test_review_service_uses_local_fallback_by_default(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_review_service_uses_external_mode_when_credentials_exist(tmp_path, monkeypatch):
-    """When credentials are present, the external review path should be called."""
+    """When provider credentials are present, the external review path should be called."""
     store = FileSystemReviewStore(tmp_path)
     service = ReviewService(store)
 
-    monkeypatch.setattr(settings, "featherless_api_key", "test-featherless")
-    monkeypatch.setattr(settings, "daytona_api_key", "test-daytona")
+    monkeypatch.setattr(settings, "llm_api_key", "test-provider-key")
+    monkeypatch.setattr(settings, "llm_base_url", "https://example.test")
+    monkeypatch.setattr(settings, "llm_model_name", "deepseek-v4-pro")
 
     async def fake_external(job_id, stage, context_manifest):
         assert job_id == "job-external"
@@ -50,11 +54,14 @@ async def test_review_service_uses_external_mode_when_credentials_exist(tmp_path
 
     monkeypatch.setattr(service, "_run_external_review", fake_external)
 
+    def builder(_emit):
+        return lambda: (_ for _ in ()).throw(AssertionError("fallback should not run"))
+
     service.schedule_review(
         job_id="job-external",
         stage=ReviewStage.RETARGET,
         context_manifest={"metrics": {"joint_limit_violations": 0}},
-        review_factory=lambda: (_ for _ in ()).throw(AssertionError("fallback should not run")),
+        review_factory_builder=builder,
     )
 
     await service._tasks[("job-external", ReviewStage.RETARGET.value)]
@@ -65,42 +72,43 @@ async def test_review_service_uses_external_mode_when_credentials_exist(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_review_service_marks_failed_when_external_review_raises(tmp_path, monkeypatch):
-    """External review failures should not crash scheduling and should persist FAILED state."""
+async def test_review_service_falls_back_locally_when_external_review_raises(tmp_path, monkeypatch):
+    """External review failures should degrade to the deterministic local review path."""
     store = FileSystemReviewStore(tmp_path)
     service = ReviewService(store)
 
-    monkeypatch.setattr(settings, "featherless_api_key", "test-featherless")
-    monkeypatch.setattr(settings, "daytona_api_key", "test-daytona")
+    monkeypatch.setattr(settings, "llm_api_key", "test-provider-key")
+    monkeypatch.setattr(settings, "llm_base_url", "https://example.test")
+    monkeypatch.setattr(settings, "llm_model_name", "deepseek-v4-pro")
 
     async def fake_external(job_id, stage, context_manifest):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(service, "_run_external_review", fake_external)
 
+    def builder(_emit):
+        return lambda: ("# Local Review", {"verdict": "rejected", "summary": "fallback"})
+
     service.schedule_review(
         job_id="job-fail",
         stage=ReviewStage.POSE,
         context_manifest={"metrics": {"detection_rate": 0.2}},
-        review_factory=lambda: ("# Local Review", {"verdict": "rejected", "summary": "fallback"}),
+        review_factory_builder=builder,
     )
 
     await service._tasks[("job-fail", ReviewStage.POSE.value)]
     review = store.get_review("job-fail", ReviewStage.POSE)
-    assert review.status == ReviewStatus.FAILED
-    assert review.error == "boom"
+    assert review.status == ReviewStatus.COMPLETED
+    assert review.verdict == ReviewVerdict.REJECTED
+    assert review.summary == "fallback"
+    assert review.error is None
 
 
 def test_review_execution_mode_property(monkeypatch):
-    """Review execution mode should switch only when both credentials exist."""
+    """Review execution mode should switch when a provider key exists."""
+    monkeypatch.setattr(settings, "llm_api_key", None)
     monkeypatch.setattr(settings, "featherless_api_key", None)
-    monkeypatch.setattr(settings, "daytona_api_key", None)
     assert settings.review_execution_mode == "local_fallback"
 
-    monkeypatch.setattr(settings, "featherless_api_key", "f")
-    monkeypatch.setattr(settings, "daytona_api_key", None)
-    assert settings.review_execution_mode == "local_fallback"
-
-    monkeypatch.setattr(settings, "featherless_api_key", "f")
-    monkeypatch.setattr(settings, "daytona_api_key", "d")
-    assert settings.review_execution_mode == "featherless_daytona"
+    monkeypatch.setattr(settings, "llm_api_key", "provider-key")
+    assert settings.review_execution_mode == "openai_compatible"

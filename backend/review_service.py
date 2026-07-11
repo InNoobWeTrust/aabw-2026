@@ -1,10 +1,9 @@
 """Async review orchestration with persisted SSE-friendly event streams.
 
-This module provides a hackathon-friendly review service that prefers a real
-Featherless + Daytona execution path when credentials are configured, while
-falling back to deterministic local review generation when those credentials are
-absent. The fallback keeps review UX/test flows functional without making the
-main pipeline depend on external services being available.
+This module prefers a generic OpenAI-compatible provider when credentials are
+configured, while falling back to deterministic local review generation when no
+provider is available. The fallback keeps review UX/test flows functional
+without making the main pipeline depend on external services.
 """
 
 from __future__ import annotations
@@ -40,9 +39,19 @@ class ReviewService:
         job_id: str,
         stage: ReviewStage,
         context_manifest: dict[str, Any],
-        review_factory: Callable[[], tuple[str, dict[str, Any]]],
+        review_factory_builder: Callable[
+            [Callable[[str, dict[str, Any]], None]],
+            Callable[[], tuple[str, dict[str, Any]]],
+        ],
     ) -> None:
-        """Schedule one review stage if it is not already running."""
+        """Schedule one review stage if it is not already running.
+
+        Args:
+            review_factory_builder: ``(emit) -> factory`` callable. The service
+                calls this with an emit hook that forwards events through
+                ``self._emit`` (so they are persisted and replayed by the SSE
+                endpoint), and uses the returned factory as the actual work.
+        """
         key = (job_id, stage.value)
         if key in self._tasks and not self._tasks[key].done():
             return
@@ -58,7 +67,7 @@ class ReviewService:
             metadata={"execution_mode": settings.review_execution_mode},
         )
         task = asyncio.create_task(
-            self._run_review(job_id, stage, context_manifest, review_factory)
+            self._run_review(job_id, stage, context_manifest, review_factory_builder)
         )
         self._tasks[key] = task
 
@@ -67,9 +76,18 @@ class ReviewService:
         job_id: str,
         stage: ReviewStage,
         context_manifest: dict[str, Any],
-        review_factory: Callable[[], tuple[str, dict[str, Any]]],
+        review_factory_builder: Callable[
+            [Callable[[str, dict[str, Any]], None]],
+            Callable[[], tuple[str, dict[str, Any]]],
+        ],
     ) -> None:
-        """Execute a review, persist its markdown/json outputs, and stream events."""
+        """Execute a review, persist its markdown/json outputs, and stream events.
+
+        The builder is given an ``emit`` hook that forwards events through
+        ``self._emit`` so the review store and SSE endpoint see them. The
+        factory itself runs inside ``asyncio.to_thread`` (CPU-bound local
+        review work); LLM-driven reviews run in ``_run_external_review``.
+        """
         started_at = datetime.now(timezone.utc)
         self._review_store.update_review(
             job_id,
@@ -80,9 +98,30 @@ class ReviewService:
         )
         self._emit(job_id, stage, "status", {"status": ReviewStatus.RUNNING.value})
         try:
-            if settings.review_execution_mode == "featherless_daytona":
-                markdown, payload = await self._run_external_review(job_id, stage, context_manifest)
+            if settings.review_execution_mode == "openai_compatible":
+                try:
+                    markdown, payload = await self._run_external_review(
+                        job_id, stage, context_manifest
+                    )
+                except Exception as exc:
+                    _logger.warning(
+                        "External review failed for %s on job %s; falling back to local review: %s",
+                        stage.value,
+                        job_id,
+                        exc,
+                    )
+
+                    def _emit_factory(event: str, event_payload: dict[str, Any]) -> None:
+                        self._emit(job_id, stage, event, event_payload)
+
+                    review_factory = review_factory_builder(_emit_factory)
+                    markdown, payload = await asyncio.to_thread(review_factory)
             else:
+
+                def _emit_factory(event: str, event_payload: dict[str, Any]) -> None:
+                    self._emit(job_id, stage, event, event_payload)
+
+                review_factory = review_factory_builder(_emit_factory)
                 markdown, payload = await asyncio.to_thread(review_factory)
 
             self._emit(job_id, stage, "section", {"name": "summary"})
@@ -128,64 +167,15 @@ class ReviewService:
         stage: ReviewStage,
         context_manifest: dict[str, Any],
     ) -> tuple[str, dict[str, Any]]:
-        """Run the review inside Daytona and call Featherless from the sandbox."""
-        sandbox_id = await self._create_daytona_sandbox()
-        try:
-            code = _build_daytona_review_program(job_id, stage, context_manifest)
-            payload = await self._run_daytona_code(sandbox_id, code)
-            markdown = str(payload.get("markdown", ""))
-            if not markdown:
-                raise RuntimeError("External review returned no markdown body")
-            return markdown, payload
-        finally:
-            await self._delete_daytona_sandbox(sandbox_id)
-
-    async def _create_daytona_sandbox(self) -> str:
-        """Create a short-lived Daytona sandbox and return its id."""
-        headers = {
-            "Authorization": f"Bearer {settings.daytona_api_key}",
-            "Content-Type": "application/json",
-        }
-        body: dict[str, Any] = {}
-        if settings.daytona_project_id:
-            body["projectId"] = settings.daytona_project_id
-        async with httpx.AsyncClient(timeout=settings.review_timeout_seconds) as client:
-            response = await client.post(
-                f"{settings.daytona_base_url}/api/sandbox",
-                headers=headers,
-                json=body,
-            )
-            response.raise_for_status()
-            data = response.json()
-        sandbox_id = data.get("id") or data.get("sandboxId")
-        if not sandbox_id:
-            raise RuntimeError("Daytona sandbox creation returned no sandbox id")
-        return str(sandbox_id)
-
-    async def _run_daytona_code(self, sandbox_id: str, code: str) -> dict[str, Any]:
-        """Execute Python code inside a Daytona sandbox and parse the JSON result."""
-        headers = {"Content-Type": "application/json"}
-        url = f"{settings.daytona_proxy_base_url}/toolbox/{sandbox_id}/process/code-run"
-        async with httpx.AsyncClient(timeout=settings.review_timeout_seconds) as client:
-            response = await client.post(url, headers=headers, json={"code": code})
-            response.raise_for_status()
-            data = response.json()
-        result_text = data.get("result", "")
-        if not result_text:
-            raise RuntimeError("Daytona code run returned no result payload")
-        return json.loads(result_text)
-
-    async def _delete_daytona_sandbox(self, sandbox_id: str) -> None:
-        """Best-effort sandbox cleanup."""
-        headers = {"Authorization": f"Bearer {settings.daytona_api_key}"}
-        async with httpx.AsyncClient(timeout=settings.review_timeout_seconds) as client:
-            try:
-                await client.delete(
-                    f"{settings.daytona_base_url}/api/sandbox/{sandbox_id}",
-                    headers=headers,
-                )
-            except Exception:  # pragma: no cover - cleanup should never break the pipeline
-                _logger.warning("Failed to delete Daytona sandbox %s", sandbox_id)
+        """Run the review through a direct OpenAI-compatible chat-completions call."""
+        payload = await _call_openai_compatible_json(
+            system_message="You are a robotics dataset review agent. Return strict JSON only.",
+            prompt=_build_review_prompt(job_id, stage, context_manifest),
+        )
+        markdown = str(payload.get("markdown", ""))
+        if not markdown:
+            raise RuntimeError("External review returned no markdown body")
+        return markdown, payload
 
     def _emit(self, job_id: str, stage: ReviewStage, event: str, payload: dict[str, Any]) -> None:
         self._review_store.append_event(
@@ -219,35 +209,87 @@ def build_retarget_review_factory(
     joint_trajectory,
     artifact_manifest: dict[str, Any],
     pose_review_summary: dict[str, Any] | None = None,
-) -> Callable[[], tuple[str, dict[str, Any]]]:
-    """Return a callable that produces a retarget-stage review payload."""
+    pose_data: dict[str, Any] | None = None,
+    mapping_profile: dict[str, Any] | None = None,
+) -> Callable[[Callable[[str, dict[str, Any]], None]], Callable[[], tuple[str, dict[str, Any]]]]:
+    """Return a builder that produces a retarget-stage review factory.
 
-    def _factory() -> tuple[str, dict[str, Any]]:
-        markdown = generate_ai_review(eval_result, joint_trajectory)
-        verdict = _retarget_verdict(eval_result)
-        summary = (
-            f"Retarget review verdict: {verdict.value.replace('_', ' ')} based on "
-            f"overall grade {eval_result.get('overall_grade', 'unknown')}."
-        )
-        payload = {
-            "stage": ReviewStage.RETARGET.value,
-            "verdict": verdict.value,
-            "summary": summary,
-            "artifact_manifest": artifact_manifest,
-            "pose_review_summary": pose_review_summary,
-            "metrics": {
-                "joint_limit_violations": eval_result.get("joint_limit_violations", 0),
-                "nan_count": eval_result.get("nan_count", 0),
-                "max_velocity": eval_result.get("max_velocity", 0.0),
-                "mean_jerk": eval_result.get("mean_jerk", 0.0),
-                "sudden_jump_count": eval_result.get("sudden_jump_count", 0),
-                "completeness_ratio": eval_result.get("completeness_ratio", 0.0),
-            },
-            "markdown": markdown,
-        }
-        return markdown, payload
+    The returned builder accepts an ``emit`` callable (the service will pass its
+    own forwarder) and returns the actual review factory. The local path now
+    actually runs the three ``agent_calibrator`` roles (handedness detection,
+    calibration review, sanity check) and emits ``progress`` events as it
+    inspects the data, so the user sees real activity instead of a templated
+    report appearing in milliseconds.
+    """
 
-    return _factory
+    def _builder(
+        emit: Callable[[str, dict[str, Any]], None],
+    ) -> Callable[[], tuple[str, dict[str, Any]]]:
+        def _factory() -> tuple[str, dict[str, Any]]:
+            # If we have real pose data, run the agent reviewer. Otherwise fall
+            # back to the legacy templated review (for backwards compatibility
+            # with jobs that pre-date the agent wiring).
+            if pose_data is not None and "world_landmarks" in pose_data:
+                from domain.mapping import MappingProfile
+
+                profile_obj = None
+                if mapping_profile:
+                    try:
+                        profile_obj = MappingProfile(**mapping_profile)
+                    except Exception:
+                        profile_obj = None
+
+                from pipeline.agent_reviewer import run_agent_review
+
+                agent_result = run_agent_review(
+                    pose_data=pose_data,
+                    eval_result=eval_result,
+                    joint_trajectory=joint_trajectory,
+                    mapping_profile=profile_obj,
+                    on_progress=lambda message: _safe_emit(emit, "progress", {"message": message}),
+                )
+                return agent_result["markdown"], agent_result["payload"]
+
+            # Legacy fallback: template-only review.
+            markdown = generate_ai_review(eval_result, joint_trajectory)
+            verdict = _retarget_verdict(eval_result)
+            summary = (
+                f"Retarget review verdict: {verdict.value.replace('_', ' ')} based on "
+                f"overall grade {eval_result.get('overall_grade', 'unknown')}."
+            )
+            payload = {
+                "stage": ReviewStage.RETARGET.value,
+                "verdict": verdict.value,
+                "summary": summary,
+                "artifact_manifest": artifact_manifest,
+                "pose_review_summary": pose_review_summary,
+                "metrics": {
+                    "joint_limit_violations": eval_result.get("joint_limit_violations", 0),
+                    "nan_count": eval_result.get("nan_count", 0),
+                    "max_velocity": eval_result.get("max_velocity", 0.0),
+                    "mean_jerk": eval_result.get("mean_jerk", 0.0),
+                    "sudden_jump_count": eval_result.get("sudden_jump_count", 0),
+                    "completeness_ratio": eval_result.get("completeness_ratio", 0.0),
+                },
+                "markdown": markdown,
+            }
+            return markdown, payload
+
+        return _factory
+
+    return _builder
+
+
+def _safe_emit(
+    emit: Callable[[str, dict[str, Any]], None],
+    event: str,
+    payload: dict[str, Any],
+) -> None:
+    """Forward one event through ``emit``, ignoring emit failures."""
+    try:
+        emit(event, payload)
+    except Exception:  # noqa: BLE001 - never let emit failure abort the review
+        _logger.warning("retarget review emit failed for event=%s", event)
 
 
 def _retarget_verdict(eval_result: dict[str, Any]) -> ReviewVerdict:
@@ -265,61 +307,42 @@ def _chunk_text(text: str, width: int) -> list[str]:
     return [text[i : i + width] for i in range(0, len(text), width)] or [""]
 
 
-def _build_daytona_review_program(
-    job_id: str,
-    stage: ReviewStage,
-    context_manifest: dict[str, Any],
-) -> str:
-    """Return a Python program executed inside Daytona to call Featherless."""
-    prompt = _build_review_prompt(job_id, stage, context_manifest)
-    prompt_json = json.dumps(prompt)
-    model_json = json.dumps(settings.review_model_name)
-    api_key_json = json.dumps(settings.featherless_api_key)
-    base_url_json = json.dumps(settings.featherless_base_url.rstrip("/"))
-    timeout_json = json.dumps(settings.review_timeout_seconds)
+async def _call_openai_compatible_json(
+    *,
+    system_message: str,
+    prompt: str,
+) -> dict[str, Any]:
+    """Call an OpenAI-compatible chat-completions endpoint and parse strict JSON."""
+    api_key = settings.effective_llm_api_key
+    if not api_key:
+        raise RuntimeError("llm_provider_not_configured")
 
-    system_message_json = json.dumps(
-        "You are a robotics dataset review agent. Return strict JSON only."
-    )
+    body = {
+        "model": settings.review_model_name,
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    async with httpx.AsyncClient(timeout=settings.review_timeout_seconds) as client:
+        response = await client.post(
+            f"{settings.effective_llm_base_url}/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        response.raise_for_status()
+        raw = response.json()
 
-    return f"""
-import json
-import urllib.request
-
-PROMPT = {prompt_json}
-MODEL = {model_json}
-API_KEY = {api_key_json}
-BASE_URL = {base_url_json}
-TIMEOUT = {timeout_json}
-SYSTEM_MESSAGE = {system_message_json}
-
-body = json.dumps({{
-    "model": MODEL,
-    "messages": [
-        {{"role": "system", "content": SYSTEM_MESSAGE}},
-        {{"role": "user", "content": PROMPT}},
-    ],
-    "temperature": 0.2,
-    "response_format": {{"type": "json_object"}},
-}}).encode("utf-8")
-
-request = urllib.request.Request(
-    BASE_URL + "/v1/chat/completions",
-    data=body,
-    headers={{
-        "Authorization": f"Bearer {{API_KEY}}",
-        "Content-Type": "application/json",
-    }},
-    method="POST",
-)
-
-with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-    raw = json.loads(response.read().decode("utf-8"))
-
-message = raw["choices"][0]["message"]["content"]
-payload = json.loads(message)
-print(json.dumps(payload))
-"""
+    message = raw["choices"][0]["message"]["content"]
+    if isinstance(message, list):
+        text_parts = [part.get("text", "") for part in message if isinstance(part, dict)]
+        message = "".join(text_parts)
+    return json.loads(message)
 
 
 def _build_review_prompt(job_id: str, stage: ReviewStage, context_manifest: dict[str, Any]) -> str:
