@@ -16,9 +16,11 @@ RoboData is a regeneration pipeline that converts 30-second phone videos of huma
 graph LR
     A[Phone Video] --> B[MediaPipe Pose]
     B --> C[3D Skeleton]
-    C --> D[pinocchio IK]
+    C --> D[Deterministic Baseline Retarget]
     D --> E[Robot Trajectory]
     E --> F[LeRobot Dataset]
+    D -.->|incremental| I[Agentic Mapping Calibrator]
+    I -.->|mapping profile| D
     B -.->|fallback| G[YOLO26-pose]
     G --> H[3D Lifting]
     H --> C
@@ -41,7 +43,7 @@ graph TD
 
     PV[Phone Video 30s] --> MP[MediaPipe Pose<br/>Google, local, $0]
     MP --> SK[3D Skeleton<br/>33 landmarks]
-    SK --> IK[pinocchio IK<br/>CPU, less than 1s]
+    SK --> IK[Deterministic baseline retarget<br/>CPU, less than 1s]
     IK --> LR[LeRobot Dataset<br/>Parquet + MP4]
 
     MP -.->|fallback| YO[YOLO26-pose<br/>Replicate, $0.002/frame]
@@ -65,7 +67,7 @@ graph TD
 | Object 3D | Hunyuan3D 3.1 | Tencent Cloud | Image-to-3D hosted API, ~$0.30/run |
 | Orchestrator agent | Claude / Gemini | AWS Bedrock / Google | Multimodal video analysis |
 | Observability | Langfuse | Langfuse | Open-source LLM observability |
-| Robot IK solver | pinocchio | INRIA (BSD) | CPU-only, <1s per trajectory |
+| Robot retarget baseline | Simplified geometric IK today; pinocchio planned/production path | Local CPU | Deterministic baseline, profile-driven |
 | Dataset format | LeRobot | HuggingFace | Apache 2.0, 25.7k stars |
 | Infrastructure | S3 + Bedrock | AWS | Storage + LLM runtime |
 
@@ -85,7 +87,7 @@ graph TD
 
 ```bash
 # Record a 30s video of someone pouring water
-# Run the pipeline (MediaPipe Pose → pinocchio IK → LeRobot)
+# Run the pipeline (MediaPipe Pose → deterministic baseline retarget → LeRobot)
 python -m robodata.pipeline --input pouring.mp4 --robot franka_panda
 
 # Output: LeRobot dataset ready for policy fine-tuning
@@ -101,6 +103,7 @@ python -m robodata.pipeline --input pouring.mp4 --robot franka_panda
 - **[Capture Tech](docs/capture-tech.md)** — Consumer device sensor capabilities
 - **[Problem Statement](docs/problem_statement/Physical%20World%20Data%20Layer.md)** — Original problem statement
 - **[Quality Evaluation](docs/quality-evaluation-strategy.md)** — 5-gate evaluation pipeline (automated + LLM + human-in-the-loop)
+- **[Agentic Mapping Calibration](docs/specs/agentic-mapping-calibration.md)** — documentation-first plan for bounded agent-assisted retarget correction
 
 ## Built For
 

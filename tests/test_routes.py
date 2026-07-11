@@ -177,7 +177,16 @@ def test_artifact_and_review_endpoints(client, tmp_path, monkeypatch):
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
         completed_at=datetime.now(timezone.utc),
-        result={"pose": {"metrics": {"detection_rate": 1.0}}},
+        result={
+            "pose": {"metrics": {"detection_rate": 1.0}},
+            "retarget": {
+                "mapping_profile": {
+                    "profile_version": 1,
+                    "handedness": "right",
+                    "workspace_scale": 1.2214285714285714,
+                }
+            },
+        },
     )
     (job_dir / "job.json").write_text(snapshot.model_dump_json(by_alias=True))
 
@@ -291,3 +300,60 @@ def test_assistant_session_routes(client, tmp_path, monkeypatch):
     )
     assert detail.status_code == 200
     assert detail.json()["session"]["session_id"] == new_session_id
+
+
+def test_job_result_includes_mapping_profile(client, tmp_path, monkeypatch):
+    """Completed job result payload should include a mapping_profile in the retarget branch."""
+    monkeypatch.setattr(_job_store, "_root", tmp_path)
+
+    job_id = "test-job-mapping-1"
+    session_id = "session-mapping-1"
+    job_dir = tmp_path / job_id
+    (job_dir / "upload").mkdir(parents=True)
+    (job_dir / "output").mkdir(parents=True)
+    video_file = job_dir / "upload" / "input.mp4"
+    video_file.write_text("video")
+
+    owner = JobOwner(role=UserRole.JUDGE, judge_session_id=session_id)
+    snapshot = JobSnapshot(
+        job_id=job_id,
+        owner=owner,
+        original_filename="input.mp4",
+        upload_path=str(video_file),
+        output_dir=str(job_dir / "output"),
+        status=JobStatus.COMPLETED,
+        stage=PipelineStage.FINALIZE,
+        progress=1.0,
+        message="Completed",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+        result={
+            "retarget": {
+                "frame_count": 3,
+                "robot": "franka_panda",
+                "mapping_profile": {
+                    "profile_version": 1,
+                    "handedness": "right",
+                    "wrist_landmark_index": 16,
+                    "workspace_scale": 1.22,
+                    "depth_scale": 1.0,
+                },
+            },
+        },
+    )
+    (job_dir / "job.json").write_text(snapshot.model_dump_json(by_alias=True))
+
+    judge_token = create_access_token(
+        SessionIdentity(role=UserRole.JUDGE, judge_session_id=session_id)
+    )
+
+    res = client.get(
+        f"/api/jobs/{job_id}",
+        headers={"Authorization": f"Bearer {judge_token}"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert "retarget" in body["result"]
+    assert "mapping_profile" in body["result"]["retarget"]
+    assert body["result"]["retarget"]["mapping_profile"]["profile_version"] == 1

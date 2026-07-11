@@ -44,9 +44,9 @@ A contributor records a 30s phone video of a task. The platform runs a regenerat
 | Embodiment | One robot per run | **Any robot** (swap URDF) |
 | Dataset value | Single-embodiment | **Cross-embodiment** |
 
-**Pipeline:** Phone video → HybrIK-X skeleton → COLMAP/3DGS scene → pinocchio IK retarget → LeRobot dataset
+**Pipeline:** Phone video → HybrIK-X skeleton → COLMAP/3DGS scene → deterministic baseline retarget (with future profile-driven calibration) → LeRobot dataset
 
-**Hackathon MVP:** Phone video → YOLO26-pose (Replicate) → 2D→3D lifting (local) → pinocchio IK → LeRobot dataset. See `docs/mvp-pipeline.md`.
+**Hackathon MVP:** Phone video → MediaPipe Pose / fallback pose → deterministic baseline retarget → LeRobot dataset, with an incremental roadmap toward an **agentic mapping calibrator** that improves retargeting by proposing structured mapping profiles rather than generating raw trajectories. See `docs/mvp-pipeline.md` and `docs/specs/agentic-mapping-calibration.md`.
 
 **Status:** 5 of 7 pipeline stages are production-ready with MIT/Apache 2.0 tools today. See `docs/regeneration-pipeline.md` for full architecture.
 
@@ -56,7 +56,7 @@ A contributor records a 30s phone video of a task. The platform runs a regenerat
 |---|---|---|
 | Human mesh recovery (HybrIK-X) | Ready | ~2–3 days |
 | Scene reconstruction (RoomPlan or 3DGS) | Ready | ~3–5 days |
-| Skeleton → robot retargeting (pinocchio) | Ready | ~1–2 days per URDF |
+| Skeleton → robot retargeting baseline | Ready | ~1–2 days per URDF |
 | Robot POV renderer (Kaolin) | Ready | ~2–3 days |
 | LeRobot packaging | Ready | ~1 day |
 | Scene privacy anonymization | Research | Not in MVP |
@@ -71,9 +71,10 @@ A contributor records a 30s phone video of a task. The platform runs a regenerat
 1. **Latency:** 5–15 min on A100 per 30s video — acceptable for contributor UX?
 2. **Rendered image quality:** Are VLAs robust to synthetic robot-POV renders? (Pi-0 evidence suggests yes.)
 3. **Default robot target:** Franka Panda (academic standard) or UR5e?
-4. **SMPL licensing:** MPII non-commercial; need commercial license or HybrIK-X joint-only path
-5. **Scene privacy for v1:** RoomPlan parametric mesh (safest) vs. 3DGS (richest)?
-6. **Policy validation:** Must prove regenerated data trains working policies (>50% success in sim)
+4. **Mapping calibration scope:** How much correction should come from deterministic profile tuning versus bounded agentic calibration?
+5. **SMPL licensing:** MPII non-commercial; need commercial license or HybrIK-X joint-only path
+6. **Scene privacy for v1:** RoomPlan parametric mesh (safest) vs. 3DGS (richest)?
+7. **Policy validation:** Must prove regenerated data trains working policies (>50% success in sim)
 
 ---
 
@@ -82,6 +83,7 @@ A contributor records a 30s phone video of a task. The platform runs a regenerat
 - Robot teleoperation (we're a data layer, not a control system)
 - Real-time policy training (we produce datasets, not deployed policies)
 - Multi-embodiment retargeting in the capture app (done centrally in pipeline)
+- Full agent-generated dense robot trajectories as training truth (bounded mapping calibration may tune deterministic retargeting, but does not replace it)
 - Tokenomics / data dividend system in v1 (volunteer contributors + CC-BY license)
 - Wearables / smart glasses / VR capture in v1 (phone-only; device-agnostic architecture)
 - Bystander consent capture (regeneration eliminates bystanders by construction)
@@ -105,6 +107,6 @@ A contributor records a 30s phone video of a task. The platform runs a regenerat
 
 1. Decide on regeneration pipeline as MVP scope
 2. Confirm Franka Panda as default robot target + pouring as reference task
-3. Validate end-to-end proof-of-concept: phone video → HybrIK-X → pinocchio → LeRobot → ACT fine-tune in sim
+3. Validate end-to-end proof-of-concept: phone video → HybrIK-X → deterministic baseline retarget → LeRobot → ACT fine-tune in sim
 4. Implement quality evaluation gates (automated metrics + LLM visual assessment)
 5. Move to product spec / requirements

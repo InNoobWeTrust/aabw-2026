@@ -51,6 +51,7 @@ from backend.review_store import FileSystemReviewStore
 from domain.auth import SessionIdentity
 from domain.enums import AssistantSessionStatus, JobStatus, PipelineStage, ReviewStage
 from domain.jobs import JobEvent, JobOwner, JobSnapshot
+from domain.mapping import MappingProfile
 from domain.reviews import AssistantMessage, AssistantSessionSnapshot, ReviewSnapshot
 from pipeline.evaluate import evaluate_trajectory
 from pipeline.package import package_lerobot, package_lerobot_skeleton
@@ -456,8 +457,9 @@ async def _run_pipeline(job_id: str) -> None:
         _update_job(
             job_id, JobStatus.RUNNING, 0.50, PipelineStage.RETARGET, "Retargeting to robot..."
         )
+        baseline_profile = MappingProfile()
         retarget_result = await loop.run_in_executor(
-            None, retarget_to_robot, pose_result, settings.target_robot
+            None, retarget_to_robot, pose_result, settings.target_robot, baseline_profile
         )
         _update_job(
             job_id,
@@ -580,6 +582,7 @@ async def _run_pipeline(job_id: str) -> None:
                 "evaluation": eval_result,
                 "artifacts": {"simulation_video": str(sim_video_path)},
                 "dataset": robot_pkg_result,
+                "mapping_profile": retarget_result["mapping_profile"],
                 "review": {"status": "pending", "verdict": None},
             },
             "static_checks": static_checks,

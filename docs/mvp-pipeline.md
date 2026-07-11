@@ -8,12 +8,13 @@
 - `docs/current-scene.md` — data needs, competitive landscape, regulatory backdrop
 - `docs/capture-tech.md` — consumer device sensor capabilities
 - `docs/quality-evaluation-strategy.md` — quality evaluation gates (automated + LLM + human review)
+- `docs/specs/agentic-mapping-calibration.md` — bounded agent-assisted retarget calibration roadmap
 
 ---
 
 ## TL;DR
 
-**Phone video → robot policy dataset using MediaPipe Pose (free, local) as primary pose source.** No GPU cluster, no model training, no self-hosted inference. MediaPipe Pose generates 33 3D landmarks directly from video — no 2D→3D lifting needed. Falls back to YOLO26-pose (Replicate API) when quality is insufficient. Total API cost: **~$0.03–0.08 for primary path, ~$0.23–0.28 if fallback triggered.**
+**Phone video → robot policy dataset using MediaPipe Pose (free, local) as primary pose source.** No GPU cluster, no model training, no self-hosted inference for the core artifact path. MediaPipe Pose generates 33 3D landmarks directly from video — no 2D→3D lifting needed. Falls back to YOLO26-pose (Replicate API) when quality is insufficient. The current robot retarget path should now be understood as a **deterministic baseline mapping** that can later be improved by an **agentic mapping calibrator** rather than replaced wholesale. Total API cost: **~$0.03–0.08 for primary path, ~$0.23–0.28 if fallback triggered.**
 
 ---
 
@@ -28,7 +29,7 @@
 | 2c | 2D→3D skeleton lifting (FALLBACK) | Simple Python | Local CPU | — | $0 | Only needed with YOLO fallback |
 | 3 | Object segmentation (optional) | SAM2 | Replicate | No | ~$0.034 | Per-video |
 | 4 | Object 3D generation (optional) | Hunyuan3D | Tencent Cloud | Yes | ~$0.30–0.60 | 200 free credits |
-| 5 | Robot IK retargeting | pinocchio + URDF | Local CPU | — | $0 | BSD; <1s per trajectory |
+| 5 | Robot retargeting baseline | Simplified geometric IK (current) / pinocchio + URDF (target) | Local CPU | — | $0 | Deterministic baseline today; profile-driven and calibration-ready |
 | 6 | Dataset packaging | LeRobot → HuggingFace Hub | Local CPU | — | $0 | Free HF hosting |
 | — | Observability | Langfuse | Langfuse | Yes | $0 (free tier) | All calls traced |
 
@@ -132,7 +133,7 @@ def extract_3d_pose(video_path):
 | 15 | Left wrist | 32 | Right foot index |
 | 16 | Right wrist | | |
 
-Key joints for robot retargeting: **LEFT_WRIST (15)**, **RIGHT_WRIST (16)**, **LEFT_ELBOW (13)**, **RIGHT_ELBOW (14)**. These map directly to end-effector targets for pinocchio IK.
+Key joints for robot retargeting: **LEFT_WRIST (15)**, **RIGHT_WRIST (16)**, **LEFT_ELBOW (13)**, **RIGHT_ELBOW (14)**. These are the core landmarks for the current deterministic baseline and the future profile-driven calibration flow.
 
 #### Fallback: YOLO26-pose + 2D→3D Lifting
 
@@ -360,14 +361,15 @@ while True:
 provides 200 free credits on activation — enough for 300–600 object generations during the
 hackathon. Endpoint: `hunyuan.intl.tencentcloudapi.com`.
 
-### Step 6 — Robot IK Retargeting (Local CPU)
+### Step 6 — Robot IK Retargeting Baseline (Local CPU)
 
 **Input:** `[T × N × 3]` 3D skeleton from Step 2 (MediaPipe: 33 landmarks; fallback: 17 joints from Step 3), target robot URDF
-**Process:** Extract right/left wrist 3D position per frame → pinocchio inverse kinematics →
-joint trajectory
+**Process:** Apply a deterministic baseline human→robot mapping, then solve IK to produce a robot joint trajectory.
 **Output:** `[T × 7]` Franka Panda joint angles (or `[T × J]` for any robot)
-**Compute:** <1s total on CPU (BSD-licensed pinocchio)
+**Compute:** <1s total on CPU for the current simplified geometric baseline; pinocchio remains the intended stronger solver path
 **Cost:** $0
+
+> **Important:** This step should be treated as the **baseline mapping pass**, not the final product architecture. The roadmap now includes an **agentic mapping calibrator** that inspects sampled source/overlay/skeleton/simulation evidence, proposes a structured `mapping_profile`, and triggers a calibrated deterministic rerun. See `docs/specs/agentic-mapping-calibration.md`.
 
 ```python
 import pinocchio as pin
@@ -458,6 +460,36 @@ def retarget_wrist_to_panda(skeleton_3d, urdf_path, wrist_joint_idx=15, source="
     return joint_angles
 ```
 
+### Step 6b — Agentic Mapping Calibration (Incremental Add-on)
+
+**Status:** planned incremental upgrade, not part of the original static MVP
+
+**Input:**
+- baseline robot trajectory and simulation from Step 6,
+- sampled original frames,
+- sampled skeleton overlay / skeleton preview frames,
+- compact pose metrics,
+- compact retarget metrics,
+- baseline mapping assumptions.
+
+**Process:** A bounded agent running via **Featherless + Daytona** behaves like a human mapping calibrator. It does **not** generate the full joint trajectory. Instead it:
+1. inspects compact evidence,
+2. proposes a structured `mapping_profile`,
+3. optionally emits sparse correction anchors,
+4. recommends whether to rerun deterministic retargeting or preserve skeleton-only export.
+
+**Output:**
+- `mapping_profile.json`
+- `decision.json`
+- optional sparse correction anchors
+- calibrated retarget rerun request
+
+**Why this is incremental:**
+- deterministic baseline remains the source of truth,
+- calibration is bounded and reproducible,
+- baseline and calibrated outputs can be compared side-by-side,
+- the system remains useful even when the agent is unavailable.
+
 ### Step 7 — Dataset Packaging (Local CPU)
 
 **Input:** `[T × 7]` joint trajectory from Step 6, original video
@@ -516,7 +548,7 @@ Every trajectory passes through 5 gates before entering the LeRobot dataset. Gat
 graph TD
     G0["GATE 0: Input Quality<br/>Orchestrator LLM<br/>video blur, lighting, pose"] -->|pass| POSE[MediaPipe Pose]
     POSE --> G1["GATE 1: Pose Quality<br/>detection confidence, missing frames"]
-    G1 -->|pass| IK[pinocchio IK]
+    G1 -->|pass| IK[Deterministic baseline retarget]
     G1 -->|fail| FALLBACK[YOLO26-pose fallback]
     FALLBACK --> IK
     IK --> G2["GATE 2: Deterministic Metrics<br/>joint limits, NaN, velocity, jerk"]
@@ -657,7 +689,8 @@ scripts/
 ├── extract_frames.py        # Step 1: Video preprocessing
 ├── orchestrate.py           # Step 0: GATE 0 — LLM quality gate
 ├── pose_3d.py               # Step 2: MediaPipe Pose → GATE 1 (pose quality)
-├── retarget.py              # Step 5-6: pinocchio IK
+├── retarget.py              # Step 6: deterministic baseline retarget
+├── calibrate_mapping.py     # Step 6b: planned agentic mapping calibration
 ├── evaluate_metrics.py      # GATE 2: Deterministic metrics
 ├── evaluate_llm.py          # GATE 3: LLM visual assessment
 ├── review_server.py         # GATE 4: Human review UI (Streamlit)
@@ -702,7 +735,7 @@ python scripts/pose_3d.py --video input.mp4 --output poses_3d.npy
 # python scripts/pose_2d.py --frames frames/ --output poses_2d.npy
 # python scripts/lift_3d.py --poses poses_2d.npy --output poses_3d.npy
 
-# 4. Robot IK retargeting (local CPU, pinocchio)
+# 4. Robot retargeting baseline (local CPU, deterministic)
 python scripts/retarget.py --poses poses_3d.npy --urdf assets/franka_panda.urdf \
     --output joints.npy --wrist-idx 15 --source mediapipe
 
@@ -921,13 +954,15 @@ See `docs/regeneration-pipeline.md` for the full seven-stage architecture. The M
    Requires A100-equivalent GPU (~2–3 min/video). See `docs/regeneration-pipeline.md` Step 1.
 3. **Add COLMAP + 3DGS** — scene reconstruction for robot-POV rendering. See
    `docs/regeneration-pipeline.md` Step 2.
-4. **Validate with ACT fine-tuning** — produce 10 episodes → fine-tune ACT in Isaac Sim →
+4. **Agentic mapping calibration** — introduce profile-driven retargeting first, then a bounded
+   calibrator agent that proposes `mapping_profile.json` and reruns deterministic retargeting.
+5. **Validate with ACT fine-tuning** — produce 10 episodes → fine-tune ACT in Isaac Sim →
    measure success rate. Target: >50% success on pouring.
-5. **Multi-robot URDF library** — UR5e, Kinova Gen3, xArm7, WidowX. Each ~1 day to configure.
+6. **Multi-robot URDF library** — UR5e, Kinova Gen3, xArm7, WidowX. Each ~1 day to configure.
 
 ### Month 2+
 
-6. **Bimanual retargeting** — dual IK chain → dual-arm URDF (ALOHA, Mobile ALOHA).
+7. **Bimanual retargeting** — dual IK chain → dual-arm URDF (ALOHA, Mobile ALOHA).
 7. **Robot POV rendering** — NVIDIA Kaolin photorealistic render of robot in scene.
 8. **Object state with FoundationPose** — 6-DoF object tracking for grasp-aware trajectories.
 9. **Web upload interface** — simple React frontend: drag video → receive dataset.

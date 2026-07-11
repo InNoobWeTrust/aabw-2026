@@ -21,13 +21,16 @@ enum definitions and immediate tests.
 from domain.auth import SessionIdentity
 from domain.enums import JobStatus, PipelineStage, QualityGrade, UserRole
 from domain.jobs import JobEvent, JobOwner, JobProgress, JobSnapshot
+from domain.mapping import AxisMapping, MappingProfile
 
 __all__ = [
+    "AxisMapping",
     "JobEvent",
     "JobOwner",
     "JobProgress",
     "JobSnapshot",
     "JobStatus",
+    "MappingProfile",
     "PipelineStage",
     "QualityGrade",
     "SessionIdentity",

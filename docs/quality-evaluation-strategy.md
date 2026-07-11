@@ -64,6 +64,8 @@ Output: JSON quality report with scores, anomaly flags, textual justification
 
 These are zero-cost, instant, and should run BEFORE LLM or human review.
 
+> **New architecture note:** deterministic metrics should now be paired with an optional **agentic mapping calibrator**. The calibrator is not a replacement for evaluation. It is a corrective stage that can propose a better mapping profile and rerun deterministic retargeting before final review.
+
 ### 2.1 Joint History Quality
 
 ```python
@@ -299,6 +301,8 @@ For the hackathon: **Gemini 2.5 Pro** is best since it natively accepts video in
 
 ### 5.1 Full Pipeline with Evaluation Gates
 
+For the planned calibration architecture, see also `docs/specs/agentic-mapping-calibration.md`.
+
 ```
 Phone Video (30s)
     │
@@ -328,7 +332,8 @@ Phone Video (30s)
                 │ PASS
                 ▼
 ┌──────────────────────────────────────────────────┐
-│  IK: pinocchio retargeting                       │
+│  IK: pinocchio retargeting (baseline)            │
+│  - baseline mapping assumptions                  │
 │  - IK convergence < 200 iters per frame          │
 │  - Output joint trajectory [T × 7]               │
 └───────────────┬──────────────────────────────────┘
@@ -341,9 +346,17 @@ Phone Video (30s)
 │  - Max velocity < 3 rad/s                        │
 │  - Completeness > 0.75                           │
 │  - Jerk score > 0.5                              │
-│  - PASS → LLM review | FAIL → auto-reject        │
 └───────────────┬──────────────────────────────────┘
-                │ PASS
+                │
+                ▼
+┌──────────────────────────────────────────────────┐
+│  CALIBRATION: Agentic Mapping Calibrator         │
+│  - sampled frame + overlay evidence              │
+│  - bounded profile suggestion                    │
+│  - optional calibrated deterministic rerun       │
+│  - may downgrade to skeleton-only salvage        │
+└───────────────┬──────────────────────────────────┘
+                │ baseline or calibrated candidate
                 ▼
 ┌──────────────────────────────────────────────────┐
 │  GATE 3: LLM Visual Assessment (Gemini/Claude)   │
@@ -421,15 +434,17 @@ def determine_review_tier(automated_results: dict, llm_results: dict) -> str:
 
 ### 5.4 Hackathon-Scope Workflow
 
-For the 4-day hackathon, implement:
+For the 4-day hackathon, implement incrementally:
 
 1. **GATE 0** (already in orchestrator) — video quality gate
 2. **GATE 2** (NEW, ~2 hours) — deterministic metrics in Python, output JSON
-3. **GATE 3** (NEW, ~3 hours) — LLM visual assessment via Gemini/Claude, prompt engineering
-4. **Review UI** (NEW, ~4 hours) — minimal Flask/Streamlit web app with side-by-side video
-5. **GATE 4** — manual (team members review during demo)
+3. **Mapping profile support** (NEW) — make retargeting configurable by an explicit `mapping_profile`
+4. **Sample generation for calibration** (NEW) — compact evidence pack for a future calibrator agent
+5. **GATE 3** (NEW, ~3 hours) — LLM visual assessment via Gemini/Claude, prompt engineering
+6. **Review UI** (NEW, ~4 hours) — minimal side-by-side UI for baseline vs calibrated comparison
+7. **GATE 4** — manual (team members review during demo)
 
-**Skip for hackathon:** Tier 2 expert review pipeline, automated rendering pipeline (mock the render), consensus scoring across multiple reviewers.
+**Skip for hackathon:** unrestricted autonomous mapping, dense agent-generated trajectories, consensus scoring across multiple reviewers, and full physics verification.
 
 ---
 
