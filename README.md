@@ -40,20 +40,28 @@ graph LR
 # Clone and set up
 git clone <repo-url> && cd aabw-2026
 
-# Install dependencies (uv manages the virtual environment automatically)
+# Option A — one-shot, demo-ready: sync Python deps + build the frontend + start the server
+make demo
+
+# Option B — step by step
+# 1. Install Python dependencies (uv manages the virtual environment automatically)
 uv sync --extra dev
 
-# Configure environment
+# 2. Configure environment
 cp .env.example .env
 # Edit .env — set JUDGE_ACCESS_PASSWORD, ADMIN_ACCESS_PASSWORD, and JWT_SECRET_KEY
 
-# Run the server (reachable over Tailscale/LAN)
-uv run uvicorn backend.server:app --host 0.0.0.0 --reload --port 8000
-# or: make dev-lan
-# local-only bind: make dev-local
+# 3. (One-time per machine) build the Next.js frontend into frontend/out/.
+#    Subsequent `make dev` invocations skip this if the build is already present.
+make frontend-build
+
+# 4. Run the server (reachable over Tailscale/LAN).
+#    `make dev` and `make dev-local` auto-build the frontend when frontend/out is missing.
+make dev              # binds 0.0.0.0:8080
+# or: make dev-local   # binds 127.0.0.1:8080
 
 # Run tests
-uv run pytest -v
+make test
 
 # Generate a synthetic upload sample
 make example-video
@@ -61,6 +69,19 @@ make example-video
 # Prepare a real recorded/public clip for upload
 make prepare-real-video INPUT=/path/to/source.mp4
 ```
+
+### Frontend build / rebuild
+
+The FastAPI app serves the built frontend from `frontend/out/`. After a fresh
+`git clone`, that directory is empty and the server will return 404 for `/` until
+the frontend has been built. The relevant targets are:
+
+| Target | Purpose |
+| --- | --- |
+| `make frontend-install` | Install `frontend/node_modules` (bun if available, else npm). |
+| `make frontend-build`   | Run `next build` to produce `frontend/out/index.html` (calls `frontend-install` first). |
+| `make frontend-rebuild` | Wipe `.next/` and `out/`, then run `frontend-build`. Use after dependency or config changes. |
+| `make dev` / `make dev-local` | Auto-runs `frontend-build` when `frontend/out/index.html` is missing. |
 
 ## Example Videos for Testing
 

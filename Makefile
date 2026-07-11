@@ -1,6 +1,7 @@
 .PHONY: help lock sync fix format lint quality test check dev dev-up doctor \
         build docker-run docker-update docker-stop docker-logs docker-nuke \
-        example-video prepare-real-video llm-probe
+        example-video prepare-real-video llm-probe \
+        frontend-install frontend-build frontend-rebuild demo
 
 CONTAINER_NAME := robodata
 IMAGE_NAME     := robodata:latest
@@ -8,6 +9,12 @@ DATA_VOLUME    := $(PWD)/data
 EXAMPLE_DIR    := $(DATA_VOLUME)/examples
 EXAMPLE_VIDEO  := $(EXAMPLE_DIR)/example_test_video.mp4
 REAL_VIDEO     := $(EXAMPLE_DIR)/real_capture_prepared.mp4
+
+# Frontend (Next.js static export → frontend/out/, mounted by FastAPI at /)
+FRONTEND_DIR   := frontend
+FRONTEND_OUT   := $(FRONTEND_DIR)/out
+FRONTEND_INDEX := $(FRONTEND_OUT)/index.html
+PKG_MANAGER    ?= $(shell command -v bun >/dev/null 2>&1 && echo bun || echo npm)
 
 help:  ## Print target descriptions
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -38,10 +45,18 @@ test:  ## Run full test suite
 
 check: fix quality test  ## Full verification: fix → lint → compile → test
 
-dev:  ## Start development server with hot reload on 0.0.0.0
+dev:  ## Start dev server (builds frontend on demand if frontend/out is missing)
+	@if [ ! -f "$(FRONTEND_INDEX)" ]; then \
+		echo "[make dev] $(FRONTEND_INDEX) not found — building frontend first..."; \
+		$(MAKE) frontend-build; \
+	fi
 	uv run uvicorn backend.server:app --host 0.0.0.0 --reload --port 8080
 
-dev-local:  ## Start development server on localhost only
+dev-local:  ## Start dev server on localhost only (builds frontend on demand)
+	@if [ ! -f "$(FRONTEND_INDEX)" ]; then \
+		echo "[make dev-local] $(FRONTEND_INDEX) not found — building frontend first..."; \
+		$(MAKE) frontend-build; \
+	fi
 	uv run uvicorn backend.server:app --host 127.0.0.1 --reload --port 8080
 
 dev-up:  ## Bootstrap dev environment from scratch
@@ -107,3 +122,37 @@ docker-nuke:  ## Stop, remove container AND delete local data volume
 	-docker rm $(CONTAINER_NAME) 2>/dev/null
 	@echo "Removing local data volume: $(DATA_VOLUME)"
 	rm -rf $(DATA_VOLUME)
+
+# ── Frontend (Next.js → static export) ────────────────────────────────────────
+
+frontend-install:  ## Install frontend dependencies (bun if available, else npm)
+	@echo "Using package manager: $(PKG_MANAGER)"
+	cd $(FRONTEND_DIR) && $(PKG_MANAGER) install --frozen-lockfile
+
+frontend-build: frontend-install  ## Build the Next.js static export into frontend/out/
+	@echo "Building Next.js static export (package manager: $(PKG_MANAGER))..."
+	cd $(FRONTEND_DIR) && $(PKG_MANAGER) run build
+	@test -f "$(FRONTEND_INDEX)" || (echo "ERROR: $(FRONTEND_INDEX) not produced — build failed." && exit 1)
+	@echo "Frontend built: $(FRONTEND_INDEX)"
+
+frontend-rebuild:  ## Clean rebuild of the frontend (removes .next and out)
+	rm -rf $(FRONTEND_DIR)/.next $(FRONTEND_OUT)
+	$(MAKE) frontend-build
+
+demo:  ## One-shot: sync Python deps, build frontend, then start dev server
+	uv lock
+	uv sync --extra dev
+	$(MAKE) frontend-build
+	@if [ ! -f .env ]; then \
+		echo "[make demo] .env not found — copying from .env.example. Edit it before running again."; \
+		cp .env.example .env; \
+	fi
+	@echo
+	@echo "================================================================"
+	@echo " RoboData is ready. Starting dev server..."
+	@echo "   UI:      http://localhost:8080"
+	@echo "   API:     http://localhost:8080/api/health"
+	@echo "   Stop:    Ctrl-C"
+	@echo "================================================================"
+	@echo
+	uv run uvicorn backend.server:app --host 0.0.0.0 --reload --port 8080
