@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from pipeline.evaluate import evaluate_trajectory
 
@@ -66,3 +67,80 @@ def test_render_simulation_video(tmp_path) -> None:
 
     assert video_file.exists()
     assert video_file.stat().st_size > 0
+
+
+def test_static_checks_missing_files(tmp_path) -> None:
+    """Static checks should fail when required files are missing."""
+    from pipeline.staged_review import run_static_checks
+
+    res = run_static_checks(tmp_path)
+    assert res["status"] == "failed"
+    assert any(c["name"] == "Dataset Files Existence" and not c["passed"] for c in res["checks"])
+
+
+def test_static_checks_valid_data(tmp_path) -> None:
+    """Static checks should pass when all files are correctly structured."""
+    import json
+
+    from pipeline.staged_review import run_static_checks
+
+    # Create dummy files
+    meta = {
+        "fps": 10,
+        "robot_type": "franka_panda",
+        "episodes": 1,
+        "total_frames": 5,
+    }
+    (tmp_path / "meta.json").write_text(json.dumps(meta))
+
+    stats = {f"joint_{i}": {"min": 0.0, "max": 1.0} for i in range(7)}
+    (tmp_path / "stats.json").write_text(json.dumps(stats))
+
+    df = pd.DataFrame(
+        {
+            "observation.state": [[0.0] * 7] * 5,
+            "action": [[0.0] * 7] * 5,
+            "timestamp": [0.1 * i for i in range(5)],
+            "episode_index": [0] * 5,
+            "frame_index": list(range(5)),
+        }
+    )
+    df.to_parquet(str(tmp_path / "episode_000000.parquet"))
+
+    res = run_static_checks(tmp_path)
+    assert res["status"] == "passed"
+    assert all(c["passed"] for c in res["checks"])
+
+
+def test_generate_ai_review() -> None:
+    """AI Review should generate valid markdown with different statuses based on metrics."""
+    from pipeline.staged_review import generate_ai_review
+
+    eval_green = {
+        "overall_grade": "green",
+        "joint_limit_violations": 0,
+        "nan_count": 0,
+        "max_velocity": 0.5,
+        "mean_jerk": 0.2,
+        "sudden_jump_count": 0,
+        "completeness_ratio": 1.0,
+    }
+    trajectory = np.zeros((10, 7))
+    report_green = generate_ai_review(eval_green, trajectory)
+    assert "APPROVED" in report_green
+    assert "✅ Pass" in report_green
+
+    eval_red = {
+        "overall_grade": "red",
+        "joint_limit_violations": 2,
+        "nan_count": 5,
+        "max_velocity": 3.5,
+        "mean_jerk": 2.5,
+        "sudden_jump_count": 8,
+        "completeness_ratio": 0.5,
+    }
+    report_red = generate_ai_review(eval_red, trajectory)
+    assert "REJECTED" in report_red
+    assert "❌ Fail" in report_red
+    assert "Resolve joint limit violations" in report_red
+    assert "Eliminate NaN values" in report_red

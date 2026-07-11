@@ -38,6 +38,7 @@ from pipeline.pose import extract_pose_from_video
 from pipeline.preprocess import extract_frames
 from pipeline.render_sim import render_simulation_video
 from pipeline.retarget import retarget_to_robot
+from pipeline.staged_review import generate_ai_review, run_static_checks
 
 router = APIRouter()
 
@@ -292,11 +293,28 @@ async def _run_pipeline(job_id: str) -> None:
             sim_video_path,
         )
 
+        _update_job(
+            job_id,
+            JobStatus.RUNNING,
+            0.96,
+            PipelineStage.FINALIZE,
+            "Running static checks and AI review...",
+        )
+
+        static_checks = run_static_checks(package_dir)
+        ai_review_md = generate_ai_review(eval_result, retarget_result["joint_trajectory"])
+
+        ai_review_path = out / "ai_review.md"
+        ai_review_path.write_text(ai_review_md, encoding="utf-8")
+
         result_payload = {
             "evaluation": eval_result,
             "package": pkg_result,
             "output_dir": str(package_dir),
             "simulation_video": str(sim_video_path),
+            "static_checks": static_checks,
+            "ai_review": ai_review_md,
+            "ai_review_path": str(ai_review_path),
         }
         _update_job(
             job_id,

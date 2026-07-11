@@ -11,6 +11,7 @@ from pipeline.pose import extract_pose_from_video
 from pipeline.preprocess import extract_frames
 from pipeline.render_sim import render_simulation_video
 from pipeline.retarget import retarget_to_robot
+from pipeline.staged_review import generate_ai_review, run_static_checks
 
 
 async def run_pipeline(
@@ -157,6 +158,20 @@ async def run_pipeline(
             joint_trajectory,
             sim_video_path,
         )
+
+        _callback(
+            "running",
+            0.96,
+            PipelineStage.FINALIZE,
+            "Running static checks and AI review...",
+        )
+
+        static_checks = run_static_checks(package_dir)
+        ai_review_md = generate_ai_review(eval_result, joint_trajectory)
+
+        ai_review_path = output_dir / "ai_review.md"
+        ai_review_path.write_text(ai_review_md, encoding="utf-8")
+
     except Exception as exc:
         _callback("failed", 0.92, PipelineStage.FINALIZE, str(exc))
         return {"status": "failed", "stage": PipelineStage.FINALIZE, "error": str(exc)}
@@ -176,6 +191,9 @@ async def run_pipeline(
         "evaluation": eval_result,
         "package": pkg_result,
         "simulation_video": str(sim_video_path),
+        "static_checks": static_checks,
+        "ai_review": ai_review_md,
+        "ai_review_path": str(ai_review_path),
     }
 
     _callback("completed", 1.0, PipelineStage.FINALIZE, "Pipeline completed successfully")
