@@ -92,12 +92,12 @@ export default function ReviewPanel({
 
   const fetchPersistedReview = async () => {
     try {
-      const res = await fetch(`/api/jobs/${jobId}/reviews/${stage}`, {
+      const artifactKey = `${stage}_review_md`;
+      const res = await fetch(`/api/jobs/${jobId}/downloads/${artifactKey}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        const data = await res.json();
-        setMarkdown(data.markdown || reviewInfo?.summary || "");
+        setMarkdown(await res.text());
       } else {
         setMarkdown(reviewInfo?.summary || "No review content found.");
       }
@@ -114,13 +114,23 @@ export default function ReviewPanel({
     let textBuffer = "";
 
     source.addEventListener("status", (e) => {
-      setStatus(e.data);
+      try {
+        const payload = JSON.parse(e.data);
+        setStatus(payload.status || "running");
+      } catch {
+        setStatus("running");
+      }
     });
 
     source.addEventListener("token", (e) => {
-      textBuffer += e.data;
+      try {
+        const payload = JSON.parse(e.data);
+        textBuffer += payload.text || "";
+      } catch {
+        textBuffer += e.data;
+      }
       setMarkdown(textBuffer);
-      
+
       // Auto scroll to bottom during typing animation
       if (bodyRef.current) {
         bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
@@ -142,9 +152,15 @@ export default function ReviewPanel({
       closeStream();
     });
 
-    source.addEventListener("done", () => {
-      setStatus("completed");
+    source.addEventListener("done", (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        setStatus(payload.status || "completed");
+      } catch {
+        setStatus("completed");
+      }
       closeStream();
+      void fetchPersistedReview();
     });
   };
 

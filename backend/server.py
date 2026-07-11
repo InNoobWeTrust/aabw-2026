@@ -1,15 +1,34 @@
 """FastAPI server: application factory, CORS, static file serving, startup/shutdown events."""
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.config import settings
 from backend.routes import _queue_manager, router
 
 _logger = logging.getLogger(__name__)
+
+
+class SPAStaticFiles(StaticFiles):
+    """Static file server that lets the app-level 404 handler drive SPA fallback.
+
+    Real files are served normally. Missing paths raise a 404 so the parent FastAPI
+    app can decide whether to return JSON (for API/assets) or `index.html` (for SPA
+    routes like `/jobs/<id>`).
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404:
+                raise
+            raise
 
 
 def create_app() -> FastAPI:
@@ -40,14 +59,17 @@ def create_app() -> FastAPI:
 
     from fastapi.responses import FileResponse, JSONResponse
 
+    frontend_out = Path("frontend/out")
+    frontend_index = frontend_out / "index.html"
+
     @app.exception_handler(404)
     async def custom_404_handler(request, exc):
         path = request.url.path
         if path.startswith("/api") or "." in path.split("/")[-1]:
             return JSONResponse(status_code=404, content={"detail": "Not found"})
-        return FileResponse("frontend/out/index.html")
+        return FileResponse(str(frontend_index))
 
-    app.mount("/", StaticFiles(directory="frontend/out", html=True), name="frontend")
+    app.mount("/", SPAStaticFiles(directory=str(frontend_out), html=False), name="frontend")
 
     return app
 

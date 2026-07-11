@@ -19,9 +19,11 @@ from backend.config import settings
 from domain.auth import SessionIdentity
 from domain.enums import UserRole
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 TOKEN_VERSION = 1
+_DEMO_IDENTITY = SessionIdentity(role=UserRole.ADMIN, judge_session_id=None)
+
 
 
 def _constant_time_compare(a: str, b: str) -> bool:
@@ -156,20 +158,21 @@ def _parse_identity(payload: dict[str, object]) -> SessionIdentity:
 
 
 def get_current_identity(
-    token: Annotated[str, Depends(oauth2_scheme)],
+    token: Annotated[str | None, Depends(oauth2_scheme)],
 ) -> SessionIdentity:
-    """FastAPI dependency: decode the Bearer token and return a SessionIdentity.
+    """FastAPI dependency: return the caller identity or the shared local demo identity.
 
-    This is the foundational auth dependency. All protected routes should use
-    this directly (for any-authenticated-user endpoints) or compose it through
-    require_admin_identity.
-
-    Args:
-        token: The Bearer token extracted from the Authorization header.
-
-    Returns:
-        The resolved SessionIdentity for the caller.
+    In demo mode, auth is bypassed completely so the app behaves like a single-user
+    local workstation. When demo mode is disabled, a valid Bearer token is required.
     """
+    if settings.demo_mode:
+        return _DEMO_IDENTITY
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     payload = _decode_token(token)
     return _parse_identity(payload)
 
@@ -194,13 +197,12 @@ def require_authenticated_identity(
 def require_authenticated_identity_optional_query(
     request: Request,
 ) -> SessionIdentity:
-    """FastAPI dependency: require any valid authenticated identity, allowing query param token.
+    """Return any valid authenticated identity, allowing query tokens or demo bypass."""
+    if settings.demo_mode:
+        return _DEMO_IDENTITY
 
-    Useful for media streams where custom headers cannot be sent (e.g. video tags).
-    """
     from fastapi.security.utils import get_authorization_scheme_param
 
-    # Check Authorization header first
     authorization = request.headers.get("Authorization")
     if authorization:
         scheme, token = get_authorization_scheme_param(authorization)
@@ -208,7 +210,6 @@ def require_authenticated_identity_optional_query(
             payload = _decode_token(token)
             return _parse_identity(payload)
 
-    # Check query parameter next
     token = request.query_params.get("token")
     if token:
         payload = _decode_token(token)

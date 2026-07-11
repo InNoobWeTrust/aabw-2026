@@ -18,6 +18,8 @@ class Settings(BaseSettings):
         - *access_password* is a legacy field retained for transition only.
     """
 
+    demo_mode: bool = True
+
     access_password: str | None = None
     judge_access_password: str | None = None
     admin_access_password: str | None = None
@@ -40,13 +42,21 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model_name: str | None = None
+
     featherless_api_key: str | None = None
     featherless_base_url: str = "https://api.featherless.ai"
     featherless_model_name: str = "kimi-k2"
+
+    # Legacy Daytona fields retained only so existing .env files keep loading.
+    # They are no longer used by the runtime execution path.
     daytona_api_key: str | None = None
-    daytona_base_url: str = "https://app.daytona.io"
-    daytona_proxy_base_url: str = "https://proxy.app.daytona.io"
+    daytona_base_url: str | None = None
+    daytona_proxy_base_url: str | None = None
     daytona_project_id: str | None = None
+
     review_timeout_seconds: int = 60
     review_max_context_chars: int = 24000
     review_stream_chunk_chars: int = 240
@@ -93,28 +103,43 @@ class Settings(BaseSettings):
     def review_execution_mode(self) -> str:
         """Return provider execution mode for reviews.
 
-        Returns ``featherless_daytona`` only when both provider and sandbox
-        credentials are configured; otherwise returns ``local_fallback`` so the
-        hackathon app still produces deterministic review artifacts.
+        Returns ``openai_compatible`` when an LLM API key is configured; otherwise
+        returns ``local_fallback`` so the hackathon app still produces deterministic
+        review artifacts without any external setup.
         """
-        if self.featherless_api_key and self.daytona_api_key:
-            return "featherless_daytona"
+        if self.effective_llm_api_key:
+            return "openai_compatible"
         return "local_fallback"
+
+    @property
+    def effective_llm_api_key(self) -> str | None:
+        """Return the configured generic provider key, falling back to Featherless."""
+        return self.llm_api_key or self.featherless_api_key
+
+    @property
+    def effective_llm_base_url(self) -> str:
+        """Return the configured OpenAI-compatible base URL with backward compatibility."""
+        return (self.llm_base_url or self.featherless_base_url).rstrip("/")
+
+    @property
+    def effective_llm_model_name(self) -> str:
+        """Return the configured model name with backward compatibility."""
+        return self.llm_model_name or self.featherless_model_name
 
     @property
     def review_provider_name(self) -> str:
         """Return the configured review provider label."""
-        return "featherless"
+        return "openai_compatible"
 
     @property
     def review_sandbox_name(self) -> str:
-        """Return the configured sandbox label."""
-        return "daytona"
+        """Return the configured execution label for hackathon-safe local orchestration."""
+        return "local_process"
 
     @property
     def review_model_name(self) -> str:
         """Return the configured model name used for external reviews."""
-        return self.featherless_model_name
+        return self.effective_llm_model_name
 
 
 settings: Settings = Settings()

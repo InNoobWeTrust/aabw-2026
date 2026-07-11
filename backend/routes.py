@@ -22,6 +22,8 @@ from backend.auth import (
     require_authenticated_identity,
     require_authenticated_identity_optional_query,
 )
+from backend.calibration_service import CalibrationService, build_mapping_calibration_factory
+from backend.calibration_store import FileSystemCalibrationStore
 from backend.config import settings
 from backend.job_store import FileSystemJobStore
 from backend.models import (
@@ -32,6 +34,7 @@ from backend.models import (
     AssistantSessionDetailResponse,
     AssistantSessionListResponse,
     AssistantSessionResponse,
+    CalibrationSnapshotResponse,
     JobListResponse,
     JobResponse,
     LoginRequest,
@@ -49,6 +52,7 @@ from backend.review_service import (
 )
 from backend.review_store import FileSystemReviewStore
 from domain.auth import SessionIdentity
+from domain.calibration import CalibrationSnapshot
 from domain.enums import AssistantSessionStatus, JobStatus, PipelineStage, ReviewStage
 from domain.jobs import JobEvent, JobOwner, JobSnapshot
 from domain.mapping import MappingProfile
@@ -74,8 +78,10 @@ _logger = logging.getLogger(__name__)
 
 _job_store = FileSystemJobStore(settings.jobs_dir)
 _review_store = FileSystemReviewStore(settings.jobs_dir)
+_calibration_store = FileSystemCalibrationStore(settings.jobs_dir)
 _assistant_store = FileSystemAssistantStore(settings.jobs_dir)
 _review_service = ReviewService(_review_store)
+_calibration_service = CalibrationService(_calibration_store)
 _assistant_service = ReviewAssistantService(_assistant_store, _job_store, _review_store)
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm"}
@@ -93,6 +99,8 @@ def _owner_from_identity(identity: SessionIdentity) -> JobOwner:
 
 def _can_access_job(identity: SessionIdentity, snapshot: JobSnapshot) -> bool:
     """Return True if *identity* is permitted to access *snapshot*."""
+    if settings.demo_mode:
+        return True
     if identity.is_admin:
         return True
     if identity.judge_session_id is None:
@@ -120,6 +128,11 @@ def _review_to_response(snapshot: ReviewSnapshot) -> ReviewSnapshotResponse:
     return ReviewSnapshotResponse(**snapshot.model_dump())
 
 
+def _calibration_to_response(snapshot: CalibrationSnapshot) -> CalibrationSnapshotResponse:
+    """Map a persisted calibration snapshot to an HTTP response model."""
+    return CalibrationSnapshotResponse(**snapshot.model_dump())
+
+
 def _assistant_session_to_response(snapshot: AssistantSessionSnapshot) -> AssistantSessionResponse:
     """Map a persisted assistant session snapshot to an HTTP response model."""
     return AssistantSessionResponse(**snapshot.model_dump())
@@ -141,6 +154,7 @@ def _artifact_manifest(job_id: str, snapshot: JobSnapshot) -> dict:
         "skeleton_overlay_video": str(output_dir / "skeleton_overlay.mp4"),
         "skeleton_preview_video": str(output_dir / "skeleton_preview.mp4"),
         "robot_simulation_video": str(output_dir / "simulation.mp4"),
+        "mapping_calibration_dir": str(output_dir / "calibration"),
         "pose_review_dir": str(reviews_dir / ReviewStage.POSE.value),
         "retarget_review_dir": str(reviews_dir / ReviewStage.RETARGET.value),
         "job_download_url": f"/api/jobs/{job_id}/download",
@@ -151,6 +165,8 @@ def _artifact_manifest(job_id: str, snapshot: JobSnapshot) -> dict:
         "robot_simulation_video_url": f"/api/jobs/{job_id}/downloads/robot_simulation_video",
         "pose_review_md_url": f"/api/jobs/{job_id}/downloads/pose_review_md",
         "retarget_review_md_url": f"/api/jobs/{job_id}/downloads/retarget_review_md",
+        "mapping_calibration_url": f"/api/jobs/{job_id}/mapping-calibration",
+        "mapping_calibration_stream_url": f"/api/jobs/{job_id}/mapping-calibration/stream",
         "assistant_sessions_url": f"/api/jobs/{job_id}/assistant/sessions",
     }
 
@@ -255,7 +271,12 @@ def _schedule_retarget_review(
     eval_result: dict,
     joint_trajectory: np.ndarray,
 ) -> None:
-    """Schedule async retarget review for an artifact-complete job."""
+    """Schedule async retarget review for an artifact-complete job.
+
+    Loads the persisted pose data and mapping profile from the job's on-disk
+    artifacts so the agent reviewer can run real inspection (handedness,
+    calibration, sanity) instead of the legacy static template.
+    """
     current_snapshot = _job_store.get_job(job_id)
     artifact_manifest = _artifact_manifest(job_id, current_snapshot)
     pose_summary = None
@@ -269,6 +290,12 @@ def _schedule_retarget_review(
             }
         except Exception:
             pose_summary = None
+    pose_data = _load_pose_data_for_review(job_id)
+    mapping_profile = (
+        (current_snapshot.result or {}).get("retarget", {}).get("mapping_profile")
+        if current_snapshot.result is not None
+        else None
+    )
     _review_service.schedule_review(
         job_id=job_id,
         stage=ReviewStage.RETARGET,
@@ -283,13 +310,55 @@ def _schedule_retarget_review(
             },
             "artifact_manifest": artifact_manifest,
         },
-        review_factory=build_retarget_review_factory(
+        review_factory_builder=build_retarget_review_factory(
             eval_result=eval_result,
             joint_trajectory=joint_trajectory,
             artifact_manifest=artifact_manifest,
             pose_review_summary=pose_summary,
+            pose_data=pose_data,
+            mapping_profile=mapping_profile,
         ),
     )
+
+
+def _load_pose_data_for_review(job_id: str) -> dict | None:
+    """Reconstruct a pose_data dict from the on-disk pose artifacts.
+
+    The orchestrator consumed the original pose_data during retarget; the
+    async review runs later and needs to re-read the world landmarks to do
+    real agent inspection. Returns None if the artifacts are missing or
+    corrupt — the review then falls back to the legacy template.
+    """
+    import numpy as _np
+
+    base = Path("data") / "jobs" / job_id / "work" / "pose"
+    landmarks_path = base / "landmarks.npy"
+    world_path = base / "world_landmarks.npy"
+    confidence_path = base / "confidence.npy"
+    if not (landmarks_path.exists() and world_path.exists() and confidence_path.exists()):
+        return None
+    try:
+        landmarks = _np.load(landmarks_path)
+        world = _np.load(world_path)
+        confidence = _np.load(confidence_path)
+    except Exception:
+        return None
+    if world.size == 0:
+        return None
+    mask_path = base / "detected_frames_mask.npy"
+    if mask_path.exists():
+        detected_mask = _np.load(mask_path)
+    else:
+        detected_mask = _np.ones(world.shape[0], dtype=bool)
+    return {
+        "landmarks": landmarks,
+        "world_landmarks": world,
+        "confidence": confidence,
+        "detected_frames_mask": detected_mask,
+        "frame_count": int(world.shape[0]),
+        "detected_frame_count": int(detected_mask.sum()),
+        "detection_rate": float(detected_mask.mean()),
+    }
 
 
 def _build_pose_review_context(job_id: str, snapshot: JobSnapshot) -> dict:
@@ -300,6 +369,65 @@ def _build_pose_review_context(job_id: str, snapshot: JobSnapshot) -> dict:
         "metrics": pose.get("metrics", {}),
         "artifact_manifest": _artifact_manifest(job_id, snapshot),
     }
+
+
+def _review_summary_or_none(job_id: str, stage: ReviewStage) -> dict | None:
+    """Return a small persisted review summary when the stage snapshot exists."""
+    if not _review_store.review_exists(job_id, stage):
+        return None
+    try:
+        review = _review_store.get_review(job_id, stage)
+    except Exception:
+        return None
+    return {
+        "status": review.status.value,
+        "verdict": review.verdict.value if review.verdict else None,
+        "summary": review.summary,
+        "json_path": review.json_path,
+    }
+
+
+def _build_mapping_calibration_context(job_id: str, snapshot: JobSnapshot) -> dict:
+    """Build a bounded mapping-calibration context from persisted job results."""
+    result = snapshot.result or {}
+    calibration = result.get("calibration", {})
+    mapping_context_samples = calibration.get("mapping_context_samples", {})
+    samples = mapping_context_samples.get("samples", [])
+    compact_samples = [
+        {
+            "sample_index": sample.get("sample_index"),
+            "frame_index": sample.get("frame_index"),
+            "timestamp_seconds": sample.get("timestamp_seconds"),
+            "artifact_keys": sorted((sample.get("artifacts") or {}).keys()),
+        }
+        for sample in samples[:8]
+    ]
+    return {
+        "job_id": job_id,
+        "artifact_manifest": _artifact_manifest(job_id, snapshot),
+        "pose_metrics": result.get("pose", {}).get("metrics", {}),
+        "retarget_metrics": result.get("retarget", {}).get("evaluation", {}),
+        "baseline_mapping_profile": result.get("retarget", {}).get("mapping_profile"),
+        "mapping_context_samples": {
+            "sample_count": mapping_context_samples.get("sample_count", 0),
+            "json_path": mapping_context_samples.get("json_path"),
+            "samples_dir": mapping_context_samples.get("samples_dir"),
+            "samples": compact_samples,
+        },
+        "pose_review_summary": _review_summary_or_none(job_id, ReviewStage.POSE),
+        "retarget_review_summary": _review_summary_or_none(job_id, ReviewStage.RETARGET),
+    }
+
+
+def _schedule_mapping_calibration(job_id: str) -> None:
+    """Schedule read-only mapping calibration for a completed job."""
+    snapshot = _job_store.get_job(job_id)
+    context_manifest = _build_mapping_calibration_context(job_id, snapshot)
+    _calibration_service.schedule_calibration(
+        job_id=job_id,
+        context_manifest=context_manifest,
+        calibration_factory=build_mapping_calibration_factory(context_manifest),
+    )
 
 
 def _complete_with_pose_only_result(
@@ -625,6 +753,7 @@ async def _run_pipeline(job_id: str) -> None:
 
     _schedule_pose_review(job_id)
     _schedule_retarget_review(job_id, eval_result, retarget_result["joint_trajectory"])
+    _schedule_mapping_calibration(job_id)
 
 
 _queue_manager = InProcessQueueManager(
@@ -701,7 +830,7 @@ async def upload_video(
             detail=f"File exceeds the {settings.max_video_size_mb}MB size limit",
         )
 
-    if identity.is_judge and identity.judge_session_id is not None:
+    if (not settings.demo_mode) and identity.is_judge and identity.judge_session_id is not None:
         active_count = _job_store.count_active_jobs_for_session(identity.judge_session_id)
         if active_count >= 1:
             raise HTTPException(
@@ -727,13 +856,14 @@ async def upload_video(
 
 @router.get("/jobs", response_model=JobListResponse)
 def list_jobs(identity: SessionIdentity = Depends(require_authenticated_identity)):
-    """Return all jobs visible to the caller, sorted newest-first."""
-    if identity.is_admin:
+    """Return the caller-visible jobs list."""
+    if settings.demo_mode or identity.is_admin:
         snapshots = _job_store.list_all_jobs()
     elif identity.judge_session_id is not None:
         snapshots = _job_store.list_jobs_for_session(identity.judge_session_id)
     else:
         snapshots = []
+
     responses = [_snapshot_to_response(s) for s in snapshots]
     return JobListResponse(jobs=responses, total=len(responses))
 
@@ -890,6 +1020,82 @@ async def stream_review(
                 sent += 1
             review = _review_store.get_review(job_id, review_stage)
             if review.status.is_terminal():
+                break
+            await _asyncio.sleep(0.25)
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
+@router.get("/jobs/{job_id}/mapping-calibration", response_model=CalibrationSnapshotResponse)
+def get_mapping_calibration(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Return the persisted read-only mapping calibration snapshot for one job."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if not _calibration_store.calibration_exists(job_id):
+        raise HTTPException(status_code=404, detail="Mapping calibration not found")
+    return _calibration_to_response(_calibration_store.get_calibration(job_id))
+
+
+@router.post("/jobs/{job_id}/mapping-calibration/run", response_model=CalibrationSnapshotResponse)
+def run_mapping_calibration(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Schedule a read-only mapping calibration run and return its current snapshot."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if snapshot.status != JobStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Mapping calibration requires a completed job")
+
+    context_manifest = _build_mapping_calibration_context(job_id, snapshot)
+    _calibration_service.schedule_calibration(
+        job_id=job_id,
+        context_manifest=context_manifest,
+        calibration_factory=build_mapping_calibration_factory(context_manifest),
+    )
+    return _calibration_to_response(_calibration_store.get_calibration(job_id))
+
+
+@router.get("/jobs/{job_id}/mapping-calibration/stream")
+async def stream_mapping_calibration(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity_optional_query),
+):
+    """Stream mapping calibration events over Server-Sent Events with persisted replay."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if not _calibration_store.calibration_exists(job_id):
+        raise HTTPException(status_code=404, detail="Mapping calibration not found")
+
+    async def _event_stream():
+        import asyncio as _asyncio
+        import json as _json
+
+        sent = 0
+        while True:
+            events = _calibration_store.list_events(job_id)
+            while sent < len(events):
+                event = events[sent]
+                payload = _json.dumps(event.payload, ensure_ascii=False)
+                yield f"event: {event.event}\ndata: {payload}\n\n"
+                sent += 1
+            calibration = _calibration_store.get_calibration(job_id)
+            if calibration.status.is_terminal():
                 break
             await _asyncio.sleep(0.25)
 

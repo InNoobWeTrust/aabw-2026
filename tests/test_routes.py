@@ -9,13 +9,22 @@ from backend.auth import create_access_token
 from backend.routes import (
     _assistant_service,
     _assistant_store,
+    _calibration_service,
+    _calibration_store,
     _job_store,
     _queue_manager,
     _review_store,
 )
 from backend.server import create_app
 from domain.auth import SessionIdentity
-from domain.enums import JobStatus, PipelineStage, UserRole
+from domain.enums import (
+    CalibrationDecision,
+    CalibrationStatus,
+    CalibrationVerdict,
+    JobStatus,
+    PipelineStage,
+    UserRole,
+)
 from domain.jobs import JobOwner, JobSnapshot
 
 
@@ -34,6 +43,7 @@ def test_video_endpoints_access_control(client, tmp_path, monkeypatch):
     # Mock jobs directory in stores to point to tmp_path
     monkeypatch.setattr(_job_store, "_root", tmp_path)
     monkeypatch.setattr(_review_store, "_jobs_root", tmp_path)
+    monkeypatch.setattr(_calibration_store, "_jobs_root", tmp_path)
     monkeypatch.setattr(_assistant_store, "_jobs_root", tmp_path)
 
     job_id = "test-job-uuid-1"
@@ -108,19 +118,20 @@ def test_video_endpoints_access_control(client, tmp_path, monkeypatch):
     assert res.status_code == 200
     assert res.text == "simulation-video-data"
 
-    # 5. Access isolation: other judge gets 404 (existence leaks avoided)
+    # 5. In demo mode, cross-session isolation is intentionally disabled.
     res = client.get(f"/api/jobs/{job_id}/video/original?token={other_judge_token}")
-    assert res.status_code == 404
+    assert res.status_code == 200
 
-    # 6. Unauthenticated request gets 401
+    # 6. In demo mode, unauthenticated local access is allowed.
     res = client.get(f"/api/jobs/{job_id}/video/original")
-    assert res.status_code == 401
+    assert res.status_code == 200
 
 
 def test_artifact_and_review_endpoints(client, tmp_path, monkeypatch):
     """Artifact manifest, fine-grained downloads, and review snapshots should be accessible."""
     monkeypatch.setattr(_job_store, "_root", tmp_path)
     monkeypatch.setattr(_review_store, "_jobs_root", tmp_path)
+    monkeypatch.setattr(_calibration_store, "_jobs_root", tmp_path)
     monkeypatch.setattr(_assistant_store, "_jobs_root", tmp_path)
 
     job_id = "test-job-uuid-2"
@@ -231,6 +242,7 @@ def test_assistant_session_routes(client, tmp_path, monkeypatch):
     """Assistant session routes should create, read, and append transcript state."""
     monkeypatch.setattr(_job_store, "_root", tmp_path)
     monkeypatch.setattr(_review_store, "_jobs_root", tmp_path)
+    monkeypatch.setattr(_calibration_store, "_jobs_root", tmp_path)
     monkeypatch.setattr(_assistant_store, "_jobs_root", tmp_path)
 
     async def fake_submit(job_id, session_id, content):
@@ -365,3 +377,130 @@ def test_job_result_includes_mapping_profile(client, tmp_path, monkeypatch):
     assert "mapping_profile" in body["result"]["retarget"]
     assert body["result"]["retarget"]["mapping_profile"]["profile_version"] == 1
     assert body["result"]["calibration"]["mapping_context_samples"]["sample_count"] == 2
+
+
+def test_mapping_calibration_endpoints(client, tmp_path, monkeypatch):
+    """Mapping calibration routes should return snapshots, allow reruns, and stream events."""
+    from backend.calibration_store import FileSystemCalibrationStore
+    from domain.calibration import CalibrationEvent, CalibrationSnapshot
+
+    monkeypatch.setattr(_job_store, "_root", tmp_path)
+    monkeypatch.setattr(_calibration_store, "_jobs_root", tmp_path)
+
+    job_id = "test-job-calibration-1"
+    session_id = "session-calibration-1"
+    job_dir = tmp_path / job_id
+    (job_dir / "upload").mkdir(parents=True)
+    (job_dir / "output" / "calibration").mkdir(parents=True)
+    video_file = job_dir / "upload" / "input.mp4"
+    video_file.write_text("video")
+
+    snapshot = JobSnapshot(
+        job_id=job_id,
+        owner=JobOwner(role=UserRole.JUDGE, judge_session_id=session_id),
+        original_filename="input.mp4",
+        upload_path=str(video_file),
+        output_dir=str(job_dir / "output"),
+        status=JobStatus.COMPLETED,
+        stage=PipelineStage.FINALIZE,
+        progress=1.0,
+        message="Completed",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+        result={
+            "pose": {"metrics": {"detection_rate": 0.95}},
+            "retarget": {
+                "evaluation": {"overall_grade": "yellow", "sudden_jump_count": 4},
+                "mapping_profile": {
+                    "profile_version": 1,
+                    "handedness": "right",
+                    "workspace_scale": 1.22,
+                    "depth_scale": 1.0,
+                    "z_clamp_enabled": False,
+                    "position_only": True,
+                    "axis_mapping": {"x": "-z", "y": "-x", "z": "y"},
+                },
+            },
+            "calibration": {
+                "mapping_context_samples": {
+                    "sample_count": 2,
+                    "json_path": str(
+                        job_dir / "output" / "calibration" / "mapping_context_samples.json"
+                    ),
+                    "samples": [],
+                }
+            },
+        },
+    )
+    (job_dir / "job.json").write_text(snapshot.model_dump_json(by_alias=True))
+
+    store = FileSystemCalibrationStore(tmp_path)
+    calibration_snapshot = CalibrationSnapshot(
+        job_id=job_id,
+        status=CalibrationStatus.COMPLETED,
+        provider="openai_compatible",
+        sandbox="local_process",
+        decision=CalibrationDecision.RERUN_WITH_PROFILE,
+        verdict=CalibrationVerdict.ROBOT_MAPPING_SALVAGEABLE,
+        summary="Depth should be damped before rerun.",
+        json_path=str(job_dir / "output" / "calibration" / "decision.json"),
+    )
+    store.write_snapshot(calibration_snapshot)
+    store.write_decision_payload(
+        job_id,
+        {
+            "decision": CalibrationDecision.RERUN_WITH_PROFILE.value,
+            "verdict": CalibrationVerdict.ROBOT_MAPPING_SALVAGEABLE.value,
+            "summary": "Depth should be damped before rerun.",
+            "mapping_profile": {"profile_version": 1, "depth_scale": 0.65},
+            "anchors": [],
+            "confidence": 0.74,
+            "risks": ["depth instability"],
+        },
+    )
+    store.append_event(
+        CalibrationEvent(
+            at=datetime.now(timezone.utc),
+            job_id=job_id,
+            event="result",
+            payload={"decision": CalibrationDecision.RERUN_WITH_PROFILE.value},
+        )
+    )
+
+    judge_token = create_access_token(
+        SessionIdentity(role=UserRole.JUDGE, judge_session_id=session_id)
+    )
+
+    get_res = client.get(
+        f"/api/jobs/{job_id}/mapping-calibration",
+        headers={"Authorization": f"Bearer {judge_token}"},
+    )
+    assert get_res.status_code == 200
+    assert get_res.json()["decision"] == CalibrationDecision.RERUN_WITH_PROFILE.value
+
+    streamed = client.get(
+        f"/api/jobs/{job_id}/mapping-calibration/stream?token={judge_token}",
+        headers={"Accept": "text/event-stream"},
+    )
+    assert streamed.status_code == 200
+    assert "event: result" in streamed.text
+    assert CalibrationDecision.RERUN_WITH_PROFILE.value in streamed.text
+
+    called = {}
+
+    def fake_schedule(*, job_id, context_manifest, calibration_factory):
+        called["job_id"] = job_id
+        called["context_manifest"] = context_manifest
+
+    monkeypatch.setattr(_calibration_service, "schedule_calibration", fake_schedule)
+
+    post_res = client.post(
+        f"/api/jobs/{job_id}/mapping-calibration/run",
+        headers={"Authorization": f"Bearer {judge_token}"},
+    )
+    assert post_res.status_code == 200
+    assert called["job_id"] == job_id
+    assert "pose_metrics" in called["context_manifest"]
+    assert "retarget_metrics" in called["context_manifest"]
+    assert "mapping_context_samples" in called["context_manifest"]

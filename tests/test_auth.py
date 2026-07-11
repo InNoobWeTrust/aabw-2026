@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from backend import auth
+from backend.config import settings
 from domain.auth import SessionIdentity
 from domain.enums import UserRole
 
@@ -25,6 +26,7 @@ def test_session_identity_allows_admin_without_judge_session_id() -> None:
 
 def test_authenticate_password_returns_admin_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """Admin password should resolve to ADMIN role without a judge session id."""
+    monkeypatch.setattr(auth.settings, "demo_mode", False)
     monkeypatch.setattr(auth.settings, "admin_access_password", "admin-secret")
     monkeypatch.setattr(auth.settings, "judge_access_password", "judge-secret")
     monkeypatch.setattr(auth.settings, "access_password", None)
@@ -37,6 +39,7 @@ def test_authenticate_password_returns_admin_identity(monkeypatch: pytest.Monkey
 
 def test_authenticate_password_returns_judge_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """Judge password should resolve to JUDGE role with a generated session id."""
+    monkeypatch.setattr(auth.settings, "demo_mode", False)
     monkeypatch.setattr(auth.settings, "admin_access_password", "admin-secret")
     monkeypatch.setattr(auth.settings, "judge_access_password", "judge-secret")
     monkeypatch.setattr(auth.settings, "access_password", None)
@@ -50,6 +53,7 @@ def test_authenticate_password_returns_judge_identity(monkeypatch: pytest.Monkey
 
 def test_authenticate_password_rejects_invalid_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unknown passwords should raise HTTP 401."""
+    monkeypatch.setattr(auth.settings, "demo_mode", False)
     monkeypatch.setattr(auth.settings, "admin_access_password", "admin-secret")
     monkeypatch.setattr(auth.settings, "judge_access_password", "judge-secret")
     monkeypatch.setattr(auth.settings, "access_password", None)
@@ -58,3 +62,13 @@ def test_authenticate_password_rejects_invalid_secret(monkeypatch: pytest.Monkey
         auth.authenticate_password("wrong-secret")
 
     assert exc_info.value.status_code == 401
+
+
+def test_get_current_identity_returns_demo_identity_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Demo mode should bypass bearer-token requirements for local single-user demos."""
+    monkeypatch.setattr(settings, "demo_mode", True)
+
+    identity = auth.get_current_identity(None)
+
+    assert identity.role == UserRole.ADMIN
+    assert identity.judge_session_id is None

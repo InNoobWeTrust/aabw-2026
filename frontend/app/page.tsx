@@ -2,23 +2,20 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { UploadCloud, X, LayoutGrid, FileText, CheckCircle2, ChevronRight, LogOut, Loader2, Sparkles, HelpCircle, MessageSquare } from "lucide-react";
-import LoginForm from "../components/LoginForm";
 import JobCard from "../components/JobCard";
 import VideoInspector from "../components/VideoInspector";
 import TrajectoryChart from "../components/TrajectoryChart";
 import ReviewPanel from "../components/ReviewPanel";
 import AssistantChat from "../components/AssistantChat";
 
-const TOKEN_KEY = "robodata_token";
-const ROLE_KEY = "robodata_role";
-const SESSION_KEY = "robodata_session_id";
+const DEMO_TOKEN = "demo-local";
 const POLL_INTERVAL_MS = 2000;
 
 export default function Home() {
-  const [token, setToken] = useState<string | null>(null);
-  const [role, setRole] = useState<string>("");
-  const [sessionId, setSessionId] = useState<string>("");
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [token, setToken] = useState<string>(DEMO_TOKEN);
+  const [role, setRole] = useState<string>("local demo");
+  const [sessionId, setSessionId] = useState<string>("shared");
+  const [isAuthChecking, setIsAuthChecking] = useState(false);
 
   // Dashboard states
   const [jobs, setJobs] = useState<any[]>([]);
@@ -45,36 +42,41 @@ export default function Home() {
 
   const pollTimers = useRef<{ [key: string]: NodeJS.Timeout }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectedJobIdRef = useRef<string | null>(null);
 
-  // Verify authentication on mount
   useEffect(() => {
-    const storedToken = localStorage.getItem(TOKEN_KEY);
-    const storedRole = localStorage.getItem(ROLE_KEY) || "";
-    const storedSid = localStorage.getItem(SESSION_KEY) || "";
+    selectedJobIdRef.current = selectedJobId;
+  }, [selectedJobId]);
 
-    if (storedToken) {
-      // Validate token
-      fetch("/api/auth/verify", {
-        headers: { Authorization: `Bearer ${storedToken}` },
-      })
-        .then((res) => {
-          if (res.ok) {
-            setToken(storedToken);
-            setRole(storedRole);
-            setSessionId(storedSid);
-            fetchJobs(storedToken);
-          } else {
-            handleLogout();
-          }
-        })
-        .catch(() => handleLogout())
-        .finally(() => setIsAuthChecking(false));
-    } else {
-      setIsAuthChecking(false);
+  const normalizeReviewsData = (data: any, jobId: string) => {
+    const byStage: Record<string, any> = { job_id: jobId };
+    for (const review of data?.reviews || []) {
+      if (review?.review_stage) {
+        byStage[review.review_stage] = review;
+      }
     }
+    return byStage;
+  };
+
+  const fetchReviewsForJob = async (jobId: string, authToken: string) => {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/reviews`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const normalized = normalizeReviewsData(data, jobId);
+      setReviewsData(normalized);
+      return normalized;
+    } catch {
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    void fetchJobs(DEMO_TOKEN);
 
     return () => {
-      // Clear all timers on unmount
       Object.values(pollTimers.current).forEach(clearTimeout);
     };
   }, []);
@@ -88,13 +90,7 @@ export default function Home() {
         const job = await res.json();
         setActiveJob(job);
         
-        const revRes = await fetch(`/api/jobs/${jobId}/reviews`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-        if (revRes.ok) {
-          const revData = await revRes.json();
-          setReviewsData(revData);
-        }
+        await fetchReviewsForJob(jobId, authToken);
 
         if (job.status === "running" || job.status === "queued") {
           startPolling(jobId, authToken);
@@ -123,16 +119,9 @@ export default function Home() {
         if (job) {
           setActiveJob(job);
           if (!reviewsData || reviewsData.job_id !== jobId) {
-            fetch(`/api/jobs/${jobId}/reviews`, {
-              headers: { Authorization: `Bearer ${token}` },
-            })
-              .then((res) => (res.ok ? res.json() : null))
-              .then((data) => {
-                if (data) setReviewsData(data);
-              })
-              .catch(() => {});
+            void fetchReviewsForJob(jobId, token!);
           }
-        } else if (token) {
+        } else {
           fetchJobDetailsDirectly(jobId, token);
         }
       } else {
@@ -150,30 +139,16 @@ export default function Home() {
     return () => window.removeEventListener("popstate", handleLocationChange);
   }, [jobs, token]);
 
-  const handleLoginSuccess = (newToken: string, newRole: string, newSessionId: string) => {
-    localStorage.setItem(TOKEN_KEY, newToken);
-    localStorage.setItem(ROLE_KEY, newRole);
-    localStorage.setItem(SESSION_KEY, newSessionId);
-
-    setToken(newToken);
-    setRole(newRole);
-    setSessionId(newSessionId);
-    fetchJobs(newToken);
-  };
-
   const handleLogout = () => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(ROLE_KEY);
-    localStorage.removeItem(SESSION_KEY);
-
-    setToken(null);
-    setRole("");
-    setSessionId("");
     setJobs([]);
     setSelectedJobId(null);
+    setActiveJob(null);
+    setReviewsData(null);
+    setVerdicts({ pose: null, retarget: null });
 
     Object.values(pollTimers.current).forEach(clearTimeout);
     pollTimers.current = {};
+    void fetchJobs(DEMO_TOKEN);
   };
 
   const fetchJobs = async (authToken: string) => {
@@ -211,8 +186,9 @@ export default function Home() {
           );
 
           // Update active modal view if it matches the polled job
-          if (selectedJobId === jobId) {
+          if (selectedJobIdRef.current === jobId) {
             setActiveJob(job);
+            void fetchReviewsForJob(jobId, authToken);
           }
 
           if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
@@ -382,16 +358,9 @@ export default function Home() {
     setActiveJob(job || null);
 
     // Fetch dual reviews snapshot
-    try {
-      const res = await fetch(`/api/jobs/${jobId}/reviews`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setReviewsData(data);
-      }
-    } catch (err) {
-      console.warn("Reviews API not available, will fall back to legacy rendering", err);
+    const reviewData = await fetchReviewsForJob(jobId, token);
+    if (!reviewData) {
+      console.warn("Reviews API not available, will fall back to legacy rendering");
     }
   };
 
@@ -437,10 +406,6 @@ export default function Home() {
         </div>
       </div>
     );
-  }
-
-  if (!token) {
-    return <LoginForm onLoginSuccess={handleLoginSuccess} />;
   }
 
   return (
