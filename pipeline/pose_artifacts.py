@@ -346,9 +346,10 @@ def _draw_pose_world(
         if not np.isfinite(x) or not np.isfinite(y):
             return None
         px = int(tx + x * scale)
-        # MediaPipe world Y points down in the source frame but conceptually "up"
-        # in the body; invert it so the skeleton reads naturally.
-        py = int(ty - y * scale)
+        # MediaPipe world-landmark Y already increases downward relative to the
+        # source frame/body layout for our persisted pose data, so do not invert
+        # it here. Inverting again flips the 3D skeleton upside down.
+        py = int(ty + y * scale)
         if px < 0 or px >= width or py < 0 or py >= height:
             return None
         return px, py

@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 
 from pipeline.evaluate import evaluate_trajectory
-from pipeline.pose_artifacts import compute_pose_review_metrics, flatten_skeleton_features
+from pipeline.pose_artifacts import (
+    _draw_pose_world,
+    compute_pose_review_metrics,
+    flatten_skeleton_features,
+)
 
 
 def test_evaluate_trajectory_returns_red_for_empty_input() -> None:
@@ -172,6 +176,30 @@ def test_pose_review_metrics_and_flatten() -> None:
     assert metrics["detection_rate"] == 1.0
     assert "left_wrist" in metrics["keypoints"]
     assert flat.shape == (4, 99)
+
+
+def test_draw_pose_world_preserves_downward_y_body_order() -> None:
+    """World-space preview rendering should not flip a body upside down."""
+    frame = np.zeros((120, 120, 3), dtype=np.uint8)
+    points = np.zeros((33, 3), dtype=np.float32)
+    confidence = np.ones((33,), dtype=np.float32)
+
+    # MediaPipe-style downward Y ordering: head above shoulders above hips above ankles.
+    points[0] = [0.0, -0.4, 0.0]  # nose
+    points[11] = [-0.1, -0.2, 0.0]  # left shoulder
+    points[12] = [0.1, -0.2, 0.0]  # right shoulder
+    points[23] = [-0.05, 0.1, 0.0]  # left hip
+    points[24] = [0.05, 0.1, 0.0]  # right hip
+    points[27] = [-0.05, 0.5, 0.0]  # left ankle
+    points[28] = [0.05, 0.5, 0.0]  # right ankle
+
+    _draw_pose_world(frame, points, confidence, True, scale=60.0, tx=60.0, ty=60.0)
+
+    nose_y = int(60.0 + points[0, 1] * 60.0)
+    ankle_y = int(60.0 + points[27, 1] * 60.0)
+    assert nose_y < ankle_y
+    assert frame[nose_y, 60].any() or frame[nose_y, 59].any() or frame[nose_y, 61].any()
+    assert frame[ankle_y, 57].any() or frame[ankle_y, 58].any() or frame[ankle_y, 59].any()
 
 
 def test_package_lerobot_skeleton(tmp_path) -> None:
