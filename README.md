@@ -26,6 +26,14 @@ graph LR
     H --> C
 ```
 
+## Screenshots & Demo
+
+![RoboData UI — initial state](https://raw.githubusercontent.com/InNoobWeTrust/aabw-2026/main/docs/pitch/media/Screenshot%202026-07-12%20at%2004-02-56%20RoboData%20%E2%80%94%20Phone%20Video%20%E2%86%92%20Robot%20Dataset.png)
+
+![RoboData UI — job running](https://raw.githubusercontent.com/InNoobWeTrust/aabw-2026/main/docs/pitch/media/Screenshot%202026-07-12%20at%2004-03-52%20RoboData%20%E2%80%94%20Phone%20Video%20%E2%86%92%20Robot%20Dataset.png)
+
+[Watch the screen recording of the full upload → run → download flow](https://raw.githubusercontent.com/InNoobWeTrust/aabw-2026/main/docs/pitch/media/Screen%20Recording%202026-07-12%20at%2004.04.43.mov)
+
 ## Quick Start (Local Dev)
 
 ```bash
