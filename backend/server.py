@@ -38,6 +38,15 @@ def create_app() -> FastAPI:
 
         _queue_manager.start()
 
+    from fastapi.responses import FileResponse, JSONResponse
+
+    @app.exception_handler(404)
+    async def custom_404_handler(request, exc):
+        path = request.url.path
+        if path.startswith("/api") or "." in path.split("/")[-1]:
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+        return FileResponse("frontend/out/index.html")
+
     app.mount("/", StaticFiles(directory="frontend/out", html=True), name="frontend")
 
     return app

@@ -27,11 +27,10 @@ export default function Home() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
-  // Details Modal states
+  // Details View states
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<any | null>(null);
   const [reviewsData, setReviewsData] = useState<any | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
   const [scrubTriggerTime, setScrubTriggerTime] = useState<number | null>(null);
@@ -80,6 +79,77 @@ export default function Home() {
     };
   }, []);
 
+  const fetchJobDetailsDirectly = async (jobId: string, authToken: string) => {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        const job = await res.json();
+        setActiveJob(job);
+        
+        const revRes = await fetch(`/api/jobs/${jobId}/reviews`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (revRes.ok) {
+          const revData = await revRes.json();
+          setReviewsData(revData);
+        }
+
+        if (job.status === "running" || job.status === "queued") {
+          startPolling(jobId, authToken);
+        }
+      } else {
+        window.history.pushState(null, "", "/");
+        setSelectedJobId(null);
+        setActiveJob(null);
+      }
+    } catch {
+      window.history.pushState(null, "", "/");
+      setSelectedJobId(null);
+      setActiveJob(null);
+    }
+  };
+
+  useEffect(() => {
+    const handleLocationChange = () => {
+      const path = window.location.pathname;
+      const match = path.match(/^\/jobs\/([a-zA-Z0-9_-]+)$/);
+      if (match) {
+        const jobId = match[1];
+        setSelectedJobId(jobId);
+        
+        const job = jobs.find((j) => j.job_id === jobId);
+        if (job) {
+          setActiveJob(job);
+          if (!reviewsData || reviewsData.job_id !== jobId) {
+            fetch(`/api/jobs/${jobId}/reviews`, {
+              headers: { Authorization: `Bearer ${token}` },
+            })
+              .then((res) => (res.ok ? res.json() : null))
+              .then((data) => {
+                if (data) setReviewsData(data);
+              })
+              .catch(() => {});
+          }
+        } else if (token) {
+          fetchJobDetailsDirectly(jobId, token);
+        }
+      } else {
+        setSelectedJobId(null);
+        setActiveJob(null);
+        setReviewsData(null);
+      }
+    };
+
+    window.addEventListener("popstate", handleLocationChange);
+    if (token) {
+      handleLocationChange();
+    }
+
+    return () => window.removeEventListener("popstate", handleLocationChange);
+  }, [jobs, token]);
+
   const handleLoginSuccess = (newToken: string, newRole: string, newSessionId: string) => {
     localStorage.setItem(TOKEN_KEY, newToken);
     localStorage.setItem(ROLE_KEY, newRole);
@@ -101,7 +171,6 @@ export default function Home() {
     setSessionId("");
     setJobs([]);
     setSelectedJobId(null);
-    setIsModalOpen(false);
 
     Object.values(pollTimers.current).forEach(clearTimeout);
     pollTimers.current = {};
@@ -255,7 +324,7 @@ export default function Home() {
       if (res.ok) {
         stopPolling(jobId);
         setJobs((prev) => prev.filter((j) => j.job_id !== jobId));
-        if (selectedJobId === jobId) handleCloseModal();
+        if (selectedJobId === jobId) handleBackToDashboard();
       }
     } catch (err) {
       console.error("Delete failed", err);
@@ -300,6 +369,7 @@ export default function Home() {
   // Open Details View
   const handleOpenDetails = async (jobId: string) => {
     if (!token) return;
+    window.history.pushState(null, "", `/jobs/${jobId}`);
     setSelectedJobId(jobId);
     setPlaybackTime(0);
     setPlaybackDuration(0);
@@ -310,7 +380,6 @@ export default function Home() {
 
     const job = jobs.find((j) => j.job_id === jobId);
     setActiveJob(job || null);
-    setIsModalOpen(true);
 
     // Fetch dual reviews snapshot
     try {
@@ -326,8 +395,8 @@ export default function Home() {
     }
   };
 
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
+  const handleBackToDashboard = () => {
+    window.history.pushState(null, "", "/");
     setSelectedJobId(null);
     setActiveJob(null);
     setReviewsData(null);
@@ -412,273 +481,272 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Main Grid */}
-      <main className="grid flex-1 grid-cols-[1.1fr_1.5fr] gap-6 p-6 overflow-hidden max-w-7xl mx-auto w-full">
-        {/* Left Side: Upload Panel */}
-        <section className="flex flex-col gap-4 rounded-2xl border border-slate-900 bg-slate-950/20 p-6 shadow-xl backdrop-blur-xl">
-          <h2 className="text-sm font-bold tracking-wider text-slate-400 uppercase">
-            Upload Demonstration
-          </h2>
-
-          <div
-            onDragEnter={handleDrag}
-            onDragOver={handleDrag}
-            onDragLeave={handleDrag}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`flex flex-col items-center justify-center rounded-xl border border-dashed p-8 text-center cursor-pointer transition-all duration-300 ${
-              dragActive
-                ? "border-accent bg-accent-dim/10"
-                : "border-slate-800 bg-slate-950/50 hover:bg-slate-950/80 hover:border-slate-700"
-            }`}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="video/mp4,video/mov,video/avi,video/webm,.mp4,.mov,.avi,.webm"
-              onChange={handleFileChange}
-              hidden
-            />
-            <UploadCloud className={`h-10 w-10 text-slate-500 mb-3 transition-transform duration-300 ${dragActive ? "scale-110 text-accent" : ""}`} />
-            <p className="text-xs font-semibold text-slate-300">
-              Drag &amp; drop a video here, or click to browse
-            </p>
-            <p className="text-[10px] text-slate-500 mt-1">MP4, MOV, AVI, WEBM (Max 100MB / 30s)</p>
-          </div>
-
-          {selectedFile && (
-            <div className="flex flex-col gap-3 rounded-lg border border-slate-800 bg-slate-950 p-4">
-              <div className="flex items-center justify-between">
-                <span className="truncate text-xs font-medium text-slate-300">
-                  {selectedFile.name}
-                </span>
-                <button
-                  disabled={isUploading}
-                  onClick={() => setSelectedFile(null)}
-                  className="text-slate-500 hover:text-slate-300"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              {isUploading ? (
-                <div className="flex items-center gap-2 text-xs text-accent">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Processing video file...</span>
-                </div>
-              ) : (
-                <button
-                  onClick={handleUploadSubmit}
-                  className="w-full rounded-lg bg-accent py-2 text-xs font-bold text-slate-950 hover:bg-accent-hover transition-colors shadow-md"
-                >
-                  Upload &amp; Process
-                </button>
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* Right Side: Jobs List */}
-        <section className="flex flex-col gap-4 rounded-2xl border border-slate-900 bg-slate-950/20 p-6 shadow-xl backdrop-blur-xl overflow-y-auto">
-          <h2 className="text-sm font-bold tracking-wider text-slate-400 uppercase">
-            Regeneration Pipeline Jobs
-          </h2>
-
-          <div className="flex flex-col gap-3">
-            {jobs.length === 0 ? (
-              <div className="flex h-48 flex-col items-center justify-center rounded-xl border border-slate-900 bg-slate-950/50 p-8 text-center text-slate-500">
-                <Sparkles className="h-8 w-8 text-slate-600 mb-2" />
-                <p className="text-xs font-medium">No job submissions found.</p>
-                <p className="text-[10px] text-slate-600 mt-0.5">Upload a video to start the pose estimation &amp; retargeting pipeline.</p>
-              </div>
-            ) : (
-              jobs.map((job) => (
-                <JobCard
-                  key={job.job_id}
-                  job={job}
-                  onViewDetails={handleOpenDetails}
-                  onDownload={(id, fn) => handleDownloadDataset(id, fn, "dataset_robot_zip")}
-                  onDelete={handleDeleteJob}
-                />
-              ))
-            )}
-          </div>
-        </section>
-      </main>
-
-      {/* Details View Glass Modal Overlay */}
-      {isModalOpen && activeJob && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md transition-opacity">
-          <div className="flex h-full max-h-[92vh] w-full max-w-6xl flex-col rounded-2xl border border-slate-800 bg-[#101320] shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-slate-900 bg-slate-950/30 p-4 px-6">
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-bold text-slate-100 truncate">
-                  Details: {activeJob.filename}
-                </span>
-                <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
-                  activeJob.status === "completed" ? "bg-emerald-500/10 text-emerald-500" : activeJob.status === "failed" ? "bg-rose-500/10 text-rose-500" : "bg-accent-dim text-accent"
-                }`}>
-                  {activeJob.status}
-                </span>
-              </div>
+      {/* Main content area */}
+      {selectedJobId && activeJob ? (
+        /* Full-Screen Details View (Master-Sidebar) */
+        <div className="flex-1 flex flex-col max-w-7xl mx-auto w-full p-6 gap-4 min-h-0 animate-in fade-in duration-200">
+          {/* Back Navigation Bar */}
+          <div className="flex items-center justify-between border-b border-slate-900 pb-3">
+            <div className="flex items-center gap-3">
               <button
-                onClick={handleCloseModal}
-                className="text-slate-400 hover:text-slate-200"
+                onClick={handleBackToDashboard}
+                className="flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors"
               >
-                <X className="h-5 w-5" />
+                ← Back to Dashboard
               </button>
+              <span className="text-sm font-bold text-slate-100 truncate">
+                Job Details: {activeJob.filename}
+              </span>
+              <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${
+                activeJob.status === "completed" ? "bg-emerald-500/10 text-emerald-500" : activeJob.status === "failed" ? "bg-rose-500/10 text-rose-500" : "bg-accent-dim text-accent"
+              }`}>
+                {activeJob.status}
+              </span>
             </div>
+          </div>
 
-            {/* Modal Scrollable Body */}
-            <div className="grid flex-1 grid-cols-1 lg:grid-cols-[2.7fr_1.3fr] gap-6 overflow-y-auto p-6">
-              {/* Left Column: Media & Charts */}
-              <div className="flex flex-col gap-4 min-w-0">
-                <VideoInspector
-                  jobId={activeJob.job_id}
-                  token={token}
-                  hasRobot={!!hasRobot}
-                  onTimeUpdate={handleTimeUpdate}
-                  scrubTime={scrubTriggerTime}
-                />
-                
-                {activeJob.status === "completed" && (
-                  <TrajectoryChart
-                    trajectory={activeJob.result?.downsampled_trajectory || []}
-                    currentTime={playbackTime}
-                    duration={playbackDuration}
-                    onScrub={handleScrub}
-                  />
-                )}
-              </div>
-
-              {/* Right Column: Meta & Reviews / Chat */}
-              <div className="flex flex-col gap-4 overflow-y-auto pr-1">
-                {/* Tab Switcher */}
-                <div className="flex gap-1 border-b border-slate-900 pb-2">
-                  <button
-                    onClick={() => setModalRightTab("reports")}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                      modalRightTab === "reports"
-                        ? "bg-slate-900 text-accent shadow-sm"
-                        : "text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    <FileText className="h-3.5 w-3.5" /> Automated Reports
-                  </button>
-                  <button
-                    onClick={() => setModalRightTab("chat")}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                      modalRightTab === "chat"
-                        ? "bg-slate-900 text-accent shadow-sm"
-                        : "text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    <MessageSquare className="h-3.5 w-3.5" /> Interactive AI Agent
-                  </button>
-                </div>
-
-                {modalRightTab === "reports" ? (
-                  <>
-                    {/* Pipeline Stats */}
-                    <div className="rounded-xl border border-slate-800 bg-slate-900/20 p-4">
-                      <h4 className="text-xs font-semibold tracking-wider text-slate-400 uppercase mb-2">
-                        Submission Stats
-                      </h4>
-                      <table className="w-full text-xs text-left border-collapse">
-                        <tbody>
-                          <tr className="border-b border-slate-900/50"><td className="py-2 text-slate-500">Job ID</td><td className="py-2 text-right font-mono text-slate-300 select-all">{activeJob.job_id}</td></tr>
-                          <tr className="border-b border-slate-900/50"><td className="py-2 text-slate-500">Filename</td><td className="py-2 text-right text-slate-300">{activeJob.filename}</td></tr>
-                          <tr className="border-b border-slate-900/50"><td className="py-2 text-slate-500">Timeline</td><td className="py-2 text-right text-slate-300">Started: {new Date(activeJob.created_at).toLocaleTimeString()}</td></tr>
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Static checks */}
-                    <div className="rounded-xl border border-slate-800 bg-slate-900/20 p-4">
-                      <h4 className="text-xs font-semibold tracking-wider text-slate-400 uppercase mb-2.5">
-                        Static Checks Checklist
-                      </h4>
-                      <ul className="flex flex-col gap-2 text-xs">
-                        {activeJob.status === "completed" && activeJob.result?.static_checks?.checks ? (
-                          activeJob.result.static_checks.checks.map((c: any, idx: number) => (
-                            <li key={`check-${idx}`} className={`flex items-start gap-2.5 rounded-lg bg-slate-950/60 p-2 border-l-2 ${c.passed ? "border-emerald-500" : "border-rose-500"}`}>
-                              <span className="text-sm leading-none mt-0.5">{c.passed ? "✅" : "❌"}</span>
-                              <div className="flex flex-col">
-                                <span className="font-semibold text-slate-200">{c.name}</span>
-                                <span className="text-[10px] text-slate-500 mt-0.5">{c.details}</span>
-                              </div>
-                            </li>
-                          ))
-                        ) : (
-                          <li className="text-slate-500 italic">Checks will populate once completed.</li>
-                        )}
-                      </ul>
-                    </div>
-
-                    {/* Stream review 1: Pose */}
-                    <ReviewPanel
-                      jobId={activeJob.job_id}
-                      token={token}
-                      stage="pose"
-                      reviewInfo={reviewsData?.pose}
-                      legacyMarkdown=""
-                      jobStatus={activeJob.status}
-                      onVerdictChange={handleVerdictChange}
-                    />
-
-                    {/* Stream review 2: Retarget */}
-                    <ReviewPanel
-                      jobId={activeJob.job_id}
-                      token={token}
-                      stage="retarget"
-                      reviewInfo={reviewsData?.retarget}
-                      legacyMarkdown={activeJob.result?.ai_review || ""}
-                      jobStatus={activeJob.status}
-                      onVerdictChange={handleVerdictChange}
-                    />
-                  </>
-                ) : (
-                  <AssistantChat jobId={activeJob.job_id} token={token} />
-                )}
-              </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-900 bg-slate-950/30 p-4 px-6 gap-3">
-              {showSalvageBanner && (
-                <div className="flex items-center gap-2 rounded-lg border border-sky-500/20 bg-sky-500/10 p-2.5 px-3 max-w-lg">
-                  <span className="float-icon text-lg leading-none">💡</span>
-                  <span className="text-[11px] text-sky-400 leading-normal font-medium">
-                    Skeleton salvage path available: Robot retargeting review rejected, but you can still download the pose-stage dataset.
-                  </span>
-                </div>
-              )}
+          {/* Body Columns */}
+          <div className="grid flex-1 grid-cols-1 lg:grid-cols-[2.7fr_1.3fr] gap-6 overflow-y-auto min-h-0">
+            {/* Left Column: Media & Charts */}
+            <div className="flex flex-col gap-4 min-w-0">
+              <VideoInspector
+                jobId={activeJob.job_id}
+                token={token}
+                hasRobot={!!hasRobot}
+                onTimeUpdate={handleTimeUpdate}
+                scrubTime={scrubTriggerTime}
+              />
               
-              <div className="flex gap-2 ml-auto">
-                {activeJob.status === "completed" && (
-                  <>
-                    <button
-                      onClick={() => handleDownloadDataset(activeJob.job_id, activeJob.filename, "dataset_skeleton_zip")}
-                      className="rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-2 text-xs font-semibold text-slate-300 hover:text-slate-100 hover:bg-slate-850 hover:border-slate-700 transition-colors"
-                    >
-                      ⬇ Download Skeleton Dataset
-                    </button>
-                    
-                    {verdicts.retarget !== "rejected" && (
-                      <button
-                        onClick={() => handleDownloadDataset(activeJob.job_id, activeJob.filename, "dataset_robot_zip")}
-                        className="rounded-lg bg-accent px-4 py-2 text-xs font-bold text-slate-950 hover:bg-accent-hover transition-all"
-                      >
-                        ⬇ Download Robot Joint Dataset
-                      </button>
-                    )}
-                  </>
-                )}
+              {activeJob.status === "completed" && (
+                <TrajectoryChart
+                  trajectory={activeJob.result?.downsampled_trajectory || []}
+                  currentTime={playbackTime}
+                  duration={playbackDuration}
+                  onScrub={handleScrub}
+                />
+              )}
+            </div>
+
+            {/* Right Column: Meta & Reviews / Chat */}
+            <div className="flex flex-col gap-4 overflow-y-auto pr-1">
+              {/* Tab Switcher */}
+              <div className="flex gap-1 border-b border-slate-900 pb-2">
+                <button
+                  onClick={() => setModalRightTab("reports")}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    modalRightTab === "reports"
+                      ? "bg-slate-900 text-accent shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <FileText className="h-3.5 w-3.5" /> Automated Reports
+                </button>
+                <button
+                  onClick={() => setModalRightTab("chat")}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    modalRightTab === "chat"
+                      ? "bg-slate-900 text-accent shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <MessageSquare className="h-3.5 w-3.5" /> Interactive AI Agent
+                </button>
               </div>
+
+              {modalRightTab === "reports" ? (
+                <>
+                  {/* Pipeline Stats */}
+                  <div className="rounded-xl border border-slate-800 bg-slate-900/20 p-4">
+                    <h4 className="text-xs font-semibold tracking-wider text-slate-400 uppercase mb-2">
+                      Submission Stats
+                    </h4>
+                    <table className="w-full text-xs text-left border-collapse">
+                      <tbody>
+                        <tr className="border-b border-slate-900/50"><td className="py-2 text-slate-500">Job ID</td><td className="py-2 text-right font-mono text-slate-300 select-all">{activeJob.job_id}</td></tr>
+                        <tr className="border-b border-slate-900/50"><td className="py-2 text-slate-500">Filename</td><td className="py-2 text-right text-slate-300">{activeJob.filename}</td></tr>
+                        <tr className="border-b border-slate-900/50"><td className="py-2 text-slate-500">Timeline</td><td className="py-2 text-right text-slate-300">Started: {new Date(activeJob.created_at).toLocaleTimeString()}</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Static checks */}
+                  <div className="rounded-xl border border-slate-800 bg-slate-900/20 p-4">
+                    <h4 className="text-xs font-semibold tracking-wider text-slate-400 uppercase mb-2.5">
+                      Static Checks Checklist
+                    </h4>
+                    <ul className="flex flex-col gap-2 text-xs">
+                      {activeJob.status === "completed" && activeJob.result?.static_checks?.checks ? (
+                        activeJob.result.static_checks.checks.map((c: any, idx: number) => (
+                          <li key={`check-${idx}`} className={`flex items-start gap-2.5 rounded-lg bg-slate-950/60 p-2 border-l-2 ${c.passed ? "border-emerald-500" : "border-rose-500"}`}>
+                            <span className="text-sm leading-none mt-0.5">{c.passed ? "✅" : "❌"}</span>
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-slate-200">{c.name}</span>
+                              <span className="text-[10px] text-slate-500 mt-0.5">{c.details}</span>
+                            </div>
+                          </li>
+                        ))
+                      ) : (
+                        <li className="text-slate-500 italic">Checks will populate once completed.</li>
+                      )}
+                    </ul>
+                  </div>
+
+                  {/* Stream review 1: Pose */}
+                  <ReviewPanel
+                    jobId={activeJob.job_id}
+                    token={token}
+                    stage="pose"
+                    reviewInfo={reviewsData?.pose}
+                    legacyMarkdown=""
+                    jobStatus={activeJob.status}
+                    onVerdictChange={handleVerdictChange}
+                  />
+
+                  {/* Stream review 2: Retarget */}
+                  <ReviewPanel
+                    jobId={activeJob.job_id}
+                    token={token}
+                    stage="retarget"
+                    reviewInfo={reviewsData?.retarget}
+                    legacyMarkdown={activeJob.result?.ai_review || ""}
+                    jobStatus={activeJob.status}
+                    onVerdictChange={handleVerdictChange}
+                  />
+                </>
+              ) : (
+                <AssistantChat jobId={activeJob.job_id} token={token} />
+              )}
+            </div>
+          </div>
+
+          {/* Action Bar Footer */}
+          <div className="flex flex-col sm:flex-row items-center justify-between border-t border-slate-900 bg-slate-950/10 py-4 gap-3 mt-auto">
+            {showSalvageBanner && (
+              <div className="flex items-center gap-2 rounded-lg border border-sky-500/20 bg-sky-500/10 p-2.5 px-3 max-w-lg">
+                <span className="float-icon text-lg leading-none">💡</span>
+                <span className="text-[11px] text-sky-400 leading-normal font-medium">
+                  Skeleton salvage path available: Robot retargeting review rejected, but you can still download the pose-stage dataset.
+                </span>
+              </div>
+            )}
+            
+            <div className="flex gap-2 ml-auto">
+              {activeJob.status === "completed" && (
+                <>
+                  <button
+                    onClick={() => handleDownloadDataset(activeJob.job_id, activeJob.filename, "dataset_skeleton_zip")}
+                    className="rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-2 text-xs font-semibold text-slate-300 hover:text-slate-100 hover:bg-slate-850 hover:border-slate-700 transition-colors"
+                  >
+                    ⬇ Download Skeleton Dataset
+                  </button>
+                  
+                  {verdicts.retarget !== "rejected" && (
+                    <button
+                      onClick={() => handleDownloadDataset(activeJob.job_id, activeJob.filename, "dataset_robot_zip")}
+                      className="rounded-lg bg-accent px-4 py-2 text-xs font-bold text-slate-950 hover:bg-accent-hover transition-all"
+                    >
+                      ⬇ Download Robot Joint Dataset
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </div>
+      ) : (
+        /* Dashboard View (Upload + List) */
+        <main className="grid flex-1 grid-cols-1 lg:grid-cols-[1.1fr_1.5fr] gap-6 p-6 overflow-hidden max-w-7xl mx-auto w-full">
+          {/* Left Side: Upload Panel */}
+          <section className="flex flex-col gap-4 rounded-2xl border border-slate-900 bg-slate-950/20 p-6 shadow-xl backdrop-blur-xl">
+            <h2 className="text-sm font-bold tracking-wider text-slate-400 uppercase">
+              Upload Demonstration
+            </h2>
+
+            <div
+              onDragEnter={handleDrag}
+              onDragOver={handleDrag}
+              onDragLeave={handleDrag}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`flex flex-col items-center justify-center rounded-xl border border-dashed p-8 text-center cursor-pointer transition-all duration-300 ${
+                dragActive
+                  ? "border-accent bg-accent-dim/10"
+                  : "border-slate-800 bg-slate-950/50 hover:bg-slate-950/80 hover:border-slate-700"
+              }`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="video/mp4,video/mov,video/avi,video/webm,.mp4,.mov,.avi,.webm"
+                onChange={handleFileChange}
+                hidden
+              />
+              <UploadCloud className={`h-10 w-10 text-slate-500 mb-3 transition-transform duration-300 ${dragActive ? "scale-110 text-accent" : ""}`} />
+              <p className="text-xs font-semibold text-slate-300">
+                Drag &amp; drop a video here, or click to browse
+              </p>
+              <p className="text-[10px] text-slate-500 mt-1">MP4, MOV, AVI, WEBM (Max 100MB / 30s)</p>
+            </div>
+
+            {selectedFile && (
+              <div className="flex flex-col gap-3 rounded-lg border border-slate-800 bg-slate-950 p-4">
+                <div className="flex items-center justify-between">
+                  <span className="truncate text-xs font-medium text-slate-300">
+                    {selectedFile.name}
+                  </span>
+                  <button
+                    disabled={isUploading}
+                    onClick={() => setSelectedFile(null)}
+                    className="text-slate-500 hover:text-slate-300"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {isUploading ? (
+                  <div className="flex items-center gap-2 text-xs text-accent">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Processing video file...</span>
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleUploadSubmit}
+                    className="w-full rounded-lg bg-accent py-2 text-xs font-bold text-slate-950 hover:bg-accent-hover transition-colors shadow-md"
+                  >
+                    Upload &amp; Process
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* Right Side: Jobs List */}
+          <section className="flex flex-col gap-4 rounded-2xl border border-slate-900 bg-slate-950/20 p-6 shadow-xl backdrop-blur-xl overflow-y-auto">
+            <h2 className="text-sm font-bold tracking-wider text-slate-400 uppercase">
+              Regeneration Pipeline Jobs
+            </h2>
+
+            <div className="flex flex-col gap-3">
+              {jobs.length === 0 ? (
+                <div className="flex h-48 flex-col items-center justify-center rounded-xl border border-slate-900 bg-slate-950/50 p-8 text-center text-slate-500">
+                  <Sparkles className="h-8 w-8 text-slate-600 mb-2" />
+                  <p className="text-xs font-medium">No job submissions found.</p>
+                  <p className="text-[10px] text-slate-600 mt-0.5">Upload a video to start the pose estimation &amp; retargeting pipeline.</p>
+                </div>
+              ) : (
+                jobs.map((job) => (
+                  <JobCard
+                    key={job.job_id}
+                    job={job}
+                    onViewDetails={handleOpenDetails}
+                    onDownload={(id, fn) => handleDownloadDataset(id, fn, "dataset_robot_zip")}
+                    onDelete={handleDeleteJob}
+                  />
+                ))
+              )}
+            </div>
+          </section>
+        </main>
       )}
     </div>
   );
