@@ -30,6 +30,7 @@ def create_app() -> FastAPI:
     async def _startup() -> None:
         """Ensure data dirs exist, recover prior crashes, and start the queue worker."""
         settings.jobs_dir.mkdir(parents=True, exist_ok=True)
+        settings.queue_dir.mkdir(parents=True, exist_ok=True)
 
         recovered = _queue_manager.recover_on_startup()
         if recovered:
