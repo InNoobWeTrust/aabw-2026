@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline.evaluate import evaluate_trajectory
+from pipeline.pose_artifacts import compute_pose_review_metrics, flatten_skeleton_features
 
 
 def test_evaluate_trajectory_returns_red_for_empty_input() -> None:
@@ -113,7 +114,7 @@ def test_static_checks_valid_data(tmp_path) -> None:
 
 
 def test_generate_ai_review() -> None:
-    """AI Review should generate valid markdown with different statuses based on metrics."""
+    """Retarget review should generate valid markdown with different statuses."""
     from pipeline.staged_review import generate_ai_review
 
     eval_green = {
@@ -144,3 +145,74 @@ def test_generate_ai_review() -> None:
     assert "❌ Fail" in report_red
     assert "Resolve joint limit violations" in report_red
     assert "Eliminate NaN values" in report_red
+
+
+def test_pose_review_metrics_and_flatten() -> None:
+    """Pose metrics and flattening should preserve frame count and detect stability."""
+    world = np.zeros((4, 33, 3), dtype=np.float32)
+    world[:, 15, 0] = [0.0, 0.01, 0.02, 0.03]
+    world[:, 16, 0] = [0.0, 0.02, 0.04, 0.06]
+    pose_result = {
+        "landmarks": world.copy(),
+        "world_landmarks": world,
+        "confidence": np.ones((4, 33), dtype=np.float32),
+        "frame_count": 4,
+        "detected_frame_count": 4,
+        "detection_rate": 1.0,
+        "detected_frames_mask": np.array([True, True, True, True]),
+    }
+
+    metrics = compute_pose_review_metrics(pose_result)
+    flat = flatten_skeleton_features(pose_result)
+
+    assert metrics["frame_count"] == 4
+    assert metrics["detection_rate"] == 1.0
+    assert "left_wrist" in metrics["keypoints"]
+    assert flat.shape == (4, 99)
+
+
+def test_package_lerobot_skeleton(tmp_path) -> None:
+    """Skeleton packaging should emit the same core dataset file trio."""
+    from pipeline.package import package_lerobot_skeleton
+
+    features = np.random.RandomState(0).rand(5, 99).astype(np.float32)
+    result = package_lerobot_skeleton(
+        features,
+        {
+            "robot": "human_skeleton",
+            "fps": 10,
+            "representation": "mediapipe_world_landmarks_flattened",
+            "landmark_count": 33,
+        },
+        tmp_path,
+    )
+
+    assert result["frame_count"] == 5
+    assert (tmp_path / "episode_000000.parquet").exists()
+    assert (tmp_path / "meta.json").exists()
+    assert (tmp_path / "stats.json").exists()
+
+
+def test_generate_pose_review() -> None:
+    """Pose review should return structured markdown and verdict payload."""
+    from pipeline.staged_review import generate_pose_review
+
+    markdown, payload = generate_pose_review(
+        {
+            "detection_rate": 0.95,
+            "average_visibility": 0.8,
+            "missing_landmark_ratio": 0.05,
+            "keypoints": {
+                "left_wrist": {"temporal_jitter": 0.01},
+                "right_wrist": {"temporal_jitter": 0.02},
+            },
+        },
+        {
+            "skeleton_overlay_video": "overlay.mp4",
+            "skeleton_preview_video": "preview.mp4",
+            "dataset_skeleton_dir": "dataset_skeleton",
+        },
+    )
+
+    assert "Pose Extraction Review Report" in markdown
+    assert payload["verdict"] == "approved"

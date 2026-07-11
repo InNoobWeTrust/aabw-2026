@@ -8,7 +8,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from domain.enums import JobStatus, PipelineStage
+from domain.enums import JobStatus, PipelineStage, ReviewStage, ReviewStatus, ReviewVerdict
 
 
 class LoginRequest(BaseModel):
@@ -71,3 +71,34 @@ class SessionSummaryListResponse(BaseModel):
 
     sessions: list[SessionSummary]
     total: int
+
+
+class ReviewSnapshotResponse(BaseModel):
+    """Public-facing stage review snapshot returned to the client."""
+
+    job_id: str
+    review_stage: ReviewStage
+    status: ReviewStatus
+    provider: str
+    sandbox: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    verdict: ReviewVerdict | None = None
+    summary: str | None = None
+    markdown_path: str | None = None
+    json_path: str | None = None
+    error: str | None = None
+    context_manifest: dict = Field(default_factory=dict)
+    metadata: dict = Field(default_factory=dict)
+
+
+class ReviewListResponse(BaseModel):
+    """Container for both stage reviews attached to one job."""
+
+    reviews: list[ReviewSnapshotResponse]
+
+
+class ArtifactManifestResponse(BaseModel):
+    """Manifest of generated artifacts for a completed or partially completed job."""
+
+    artifacts: dict

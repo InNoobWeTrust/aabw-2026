@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     featherless_model_name: str = "kimi-k2"
     daytona_api_key: str | None = None
     daytona_base_url: str = "https://app.daytona.io"
+    daytona_proxy_base_url: str = "https://proxy.app.daytona.io"
     daytona_project_id: str | None = None
     review_timeout_seconds: int = 60
     review_max_context_chars: int = 24000

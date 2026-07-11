@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -22,30 +23,48 @@ from backend.auth import (
 from backend.config import settings
 from backend.job_store import FileSystemJobStore
 from backend.models import (
+    ArtifactManifestResponse,
     JobListResponse,
     JobResponse,
     LoginRequest,
+    ReviewListResponse,
+    ReviewSnapshotResponse,
     SessionSummary,
     SessionSummaryListResponse,
     TokenResponse,
 )
 from backend.queue_manager import InProcessQueueManager
+from backend.review_service import (
+    ReviewService,
+    build_pose_review_factory,
+    build_retarget_review_factory,
+)
+from backend.review_store import FileSystemReviewStore
 from domain.auth import SessionIdentity
-from domain.enums import JobStatus, PipelineStage
+from domain.enums import JobStatus, PipelineStage, ReviewStage
 from domain.jobs import JobEvent, JobOwner, JobSnapshot
+from domain.reviews import ReviewSnapshot
 from pipeline.evaluate import evaluate_trajectory
-from pipeline.package import package_lerobot
+from pipeline.package import package_lerobot, package_lerobot_skeleton
 from pipeline.pose import extract_pose_from_video
+from pipeline.pose_artifacts import (
+    compute_pose_review_metrics,
+    flatten_skeleton_features,
+    render_skeleton_overlay_video,
+    render_skeleton_preview_video,
+)
 from pipeline.preprocess import extract_frames
 from pipeline.render_sim import render_simulation_video
 from pipeline.retarget import retarget_to_robot
-from pipeline.staged_review import generate_ai_review, run_static_checks
+from pipeline.staged_review import run_static_checks
 
 router = APIRouter()
 
 _logger = logging.getLogger(__name__)
 
 _job_store = FileSystemJobStore(settings.jobs_dir)
+_review_store = FileSystemReviewStore(settings.jobs_dir)
+_review_service = ReviewService(_review_store)
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm"}
 
@@ -84,6 +103,82 @@ def _snapshot_to_response(snapshot: JobSnapshot) -> JobResponse:
     )
 
 
+def _review_to_response(snapshot: ReviewSnapshot) -> ReviewSnapshotResponse:
+    """Map a persisted review snapshot to an HTTP response model."""
+    return ReviewSnapshotResponse(**snapshot.model_dump())
+
+
+def _artifact_manifest(job_id: str, snapshot: JobSnapshot) -> dict:
+    """Return a stage-aware artifact manifest for a job."""
+    output_dir = Path(snapshot.output_dir)
+    reviews_dir = output_dir / "reviews"
+    return {
+        "original_video": snapshot.upload_path,
+        "dataset_skeleton_dir": str(output_dir / "dataset_skeleton"),
+        "dataset_robot_dir": str(output_dir / "dataset_robot"),
+        "skeleton_overlay_video": str(output_dir / "skeleton_overlay.mp4"),
+        "skeleton_preview_video": str(output_dir / "skeleton_preview.mp4"),
+        "robot_simulation_video": str(output_dir / "simulation.mp4"),
+        "pose_review_dir": str(reviews_dir / ReviewStage.POSE.value),
+        "retarget_review_dir": str(reviews_dir / ReviewStage.RETARGET.value),
+        "job_download_url": f"/api/jobs/{job_id}/download",
+        "dataset_skeleton_zip_url": f"/api/jobs/{job_id}/downloads/dataset_skeleton_zip",
+        "dataset_robot_zip_url": f"/api/jobs/{job_id}/downloads/dataset_robot_zip",
+        "skeleton_overlay_video_url": f"/api/jobs/{job_id}/downloads/skeleton_overlay_video",
+        "skeleton_preview_video_url": f"/api/jobs/{job_id}/downloads/skeleton_preview_video",
+        "robot_simulation_video_url": f"/api/jobs/{job_id}/downloads/robot_simulation_video",
+        "pose_review_md_url": f"/api/jobs/{job_id}/downloads/pose_review_md",
+        "retarget_review_md_url": f"/api/jobs/{job_id}/downloads/retarget_review_md",
+    }
+
+
+def _review_stage_or_404(stage: str) -> ReviewStage:
+    """Parse a string review stage or raise a 404-like HTTPException."""
+    try:
+        return ReviewStage(stage)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown review stage '{stage}'") from exc
+
+
+def _artifact_path_for_key(snapshot: JobSnapshot, artifact_key: str) -> Path:
+    """Resolve a known artifact key to an on-disk path under the job output tree."""
+    output_dir = Path(snapshot.output_dir)
+    mapping = {
+        "dataset_skeleton_zip": output_dir / "dataset_skeleton",
+        "dataset_robot_zip": output_dir / "dataset_robot",
+        "skeleton_overlay_video": output_dir / "skeleton_overlay.mp4",
+        "skeleton_preview_video": output_dir / "skeleton_preview.mp4",
+        "robot_simulation_video": output_dir / "simulation.mp4",
+        "pose_review_md": output_dir / "reviews" / ReviewStage.POSE.value / "review.md",
+        "retarget_review_md": output_dir / "reviews" / ReviewStage.RETARGET.value / "review.md",
+    }
+    try:
+        return mapping[artifact_key]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown artifact '{artifact_key}'") from exc
+
+
+def _zip_path_response(path: Path, filename: str) -> StreamingResponse:
+    """Return a StreamingResponse containing a zip of one file or directory."""
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Requested path not found")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if path.is_file():
+            zf.write(path, path.name)
+        else:
+            for file_path in path.rglob("*"):
+                if file_path.is_file():
+                    zf.write(file_path, file_path.relative_to(path))
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _update_job(
     job_id: str,
     status: JobStatus,
@@ -117,12 +212,118 @@ def _update_job(
     _job_store.append_event(job_id, event)
 
 
-async def _run_pipeline(job_id: str) -> None:
-    """Run the full pipeline stages, updating the job store at each step.
+def _schedule_pose_review(job_id: str) -> None:
+    """Schedule async pose review for an artifact-complete job."""
+    current_snapshot = _job_store.get_job(job_id)
+    pose_context = _build_pose_review_context(job_id, current_snapshot)
+    _review_service.schedule_review(
+        job_id=job_id,
+        stage=ReviewStage.POSE,
+        context_manifest=pose_context,
+        review_factory=build_pose_review_factory(
+            metrics=pose_context["metrics"],
+            artifact_manifest=pose_context["artifact_manifest"],
+        ),
+    )
 
-    Pipeline stages run synchronously within a thread-pool executor.
-    Progress and status are persisted through the job store after every stage.
-    """
+
+def _schedule_retarget_review(
+    job_id: str,
+    eval_result: dict,
+    joint_trajectory: np.ndarray,
+) -> None:
+    """Schedule async retarget review for an artifact-complete job."""
+    current_snapshot = _job_store.get_job(job_id)
+    artifact_manifest = _artifact_manifest(job_id, current_snapshot)
+    pose_summary = None
+    if _review_store.review_exists(job_id, ReviewStage.POSE):
+        try:
+            pose_snapshot = _review_store.get_review(job_id, ReviewStage.POSE)
+            pose_summary = {
+                "status": pose_snapshot.status.value,
+                "verdict": pose_snapshot.verdict.value if pose_snapshot.verdict else None,
+                "summary": pose_snapshot.summary,
+            }
+        except Exception:
+            pose_summary = None
+    _review_service.schedule_review(
+        job_id=job_id,
+        stage=ReviewStage.RETARGET,
+        context_manifest={
+            "metrics": {
+                "joint_limit_violations": eval_result.get("joint_limit_violations", 0),
+                "nan_count": eval_result.get("nan_count", 0),
+                "max_velocity": eval_result.get("max_velocity", 0.0),
+                "mean_jerk": eval_result.get("mean_jerk", 0.0),
+                "sudden_jump_count": eval_result.get("sudden_jump_count", 0),
+                "completeness_ratio": eval_result.get("completeness_ratio", 0.0),
+            },
+            "artifact_manifest": artifact_manifest,
+        },
+        review_factory=build_retarget_review_factory(
+            eval_result=eval_result,
+            joint_trajectory=joint_trajectory,
+            artifact_manifest=artifact_manifest,
+            pose_review_summary=pose_summary,
+        ),
+    )
+
+
+def _build_pose_review_context(job_id: str, snapshot: JobSnapshot) -> dict:
+    """Build a bounded pose-review context from persisted job results."""
+    result = snapshot.result or {}
+    pose = result.get("pose", {})
+    return {
+        "metrics": pose.get("metrics", {}),
+        "artifact_manifest": _artifact_manifest(job_id, snapshot),
+    }
+
+
+def _complete_with_pose_only_result(
+    *,
+    job_id: str,
+    snapshot: JobSnapshot,
+    pose_result: dict,
+    pose_metrics: dict,
+    preprocess_result: dict,
+    skeleton_overlay_path: Path,
+    skeleton_preview_path: Path,
+    skeleton_pkg_result: dict,
+    retarget_error: str,
+) -> None:
+    """Complete the job with skeleton-only artifacts when retargeting fails."""
+    result_payload = {
+        "artifacts": _artifact_manifest(job_id, snapshot),
+        "preprocess": preprocess_result,
+        "pose": {
+            "frame_count": pose_result["frame_count"],
+            "detected_frame_count": pose_result["detected_frame_count"],
+            "detection_rate": pose_result["detection_rate"],
+            "metrics": pose_metrics,
+            "artifacts": {
+                "overlay_video": str(skeleton_overlay_path),
+                "preview_video": str(skeleton_preview_path),
+            },
+            "dataset": skeleton_pkg_result,
+            "review": {"status": "pending", "verdict": None},
+        },
+        "retarget": {
+            "error": retarget_error,
+            "review": {"status": "failed", "verdict": None},
+        },
+    }
+    _update_job(
+        job_id,
+        JobStatus.COMPLETED,
+        1.0,
+        PipelineStage.RETARGET,
+        "Pipeline completed with skeleton-only artifacts; retargeting failed",
+        result=result_payload,
+    )
+
+
+async def _run_pipeline(job_id: str) -> None:
+    """Run the full pipeline, persist dual artifact branches, and schedule async reviews."""
     import asyncio as _asyncio
 
     loop = _asyncio.get_running_loop()
@@ -135,7 +336,10 @@ async def _run_pipeline(job_id: str) -> None:
 
     video_path = snapshot.upload_path
     out = Path(snapshot.output_dir)
-    frames_dir = out.parent / "work" / "frames"
+    job_root = out.parent
+    frames_dir = job_root / "work" / "frames"
+    pose_work_dir = job_root / "work" / "pose"
+    pose_work_dir.mkdir(parents=True, exist_ok=True)
 
     # Stage: PREPROCESS
     try:
@@ -163,30 +367,66 @@ async def _run_pipeline(job_id: str) -> None:
         )
         return
 
-    # Stage: POSE
+    # Stage: POSE + skeleton export
     try:
         _update_job(
             job_id, JobStatus.RUNNING, 0.25, PipelineStage.POSE, "Running MediaPipe Pose..."
         )
         pose_result = await loop.run_in_executor(None, extract_pose_from_video, video_path)
+        np.save(pose_work_dir / "landmarks.npy", pose_result["landmarks"])
+        np.save(pose_work_dir / "world_landmarks.npy", pose_result["world_landmarks"])
+        np.save(pose_work_dir / "confidence.npy", pose_result["confidence"])
+
+        skeleton_overlay_path = out / "skeleton_overlay.mp4"
+        skeleton_preview_path = out / "skeleton_preview.mp4"
+        await loop.run_in_executor(
+            None,
+            render_skeleton_overlay_video,
+            video_path,
+            pose_result,
+            skeleton_overlay_path,
+        )
+        await loop.run_in_executor(
+            None,
+            render_skeleton_preview_video,
+            pose_result,
+            skeleton_preview_path,
+        )
+
+        skeleton_features = flatten_skeleton_features(pose_result)
+        skeleton_dataset_dir = out / "dataset_skeleton"
+        pose_metrics = compute_pose_review_metrics(pose_result)
+        pose_metadata = {
+            "job_id": job_id,
+            "video": Path(video_path).name,
+            "robot": "human_skeleton",
+            "representation": "mediapipe_world_landmarks_flattened",
+            "landmark_count": 33,
+            "fps": 10,
+            "quality": pose_metrics,
+        }
+        skeleton_pkg_result = await loop.run_in_executor(
+            None,
+            package_lerobot_skeleton,
+            skeleton_features,
+            pose_metadata,
+            str(skeleton_dataset_dir),
+        )
+        detected_message = (
+            "Detected pose in "
+            f"{pose_result['detected_frame_count']}/{pose_result['frame_count']} frames "
+            f"({pose_result['detection_rate']:.0%})"
+        )
         _update_job(
             job_id,
             JobStatus.RUNNING,
             0.40,
             PipelineStage.POSE,
-            (
-                f"Detected pose in {pose_result['frame_count']} frames "
-                f"({pose_result['detection_rate']:.0%})"
-            ),
+            detected_message,
         )
     except Exception as exc:
         _update_job(
-            job_id,
-            JobStatus.FAILED,
-            0.25,
-            PipelineStage.POSE,
-            str(exc),
-            failure_reason=str(exc),
+            job_id, JobStatus.FAILED, 0.25, PipelineStage.POSE, str(exc), failure_reason=str(exc)
         )
         return
 
@@ -206,14 +446,18 @@ async def _run_pipeline(job_id: str) -> None:
             f"Generated {retarget_result['frame_count']} joint frames",
         )
     except Exception as exc:
-        _update_job(
-            job_id,
-            JobStatus.FAILED,
-            0.50,
-            PipelineStage.RETARGET,
-            str(exc),
-            failure_reason=str(exc),
+        _complete_with_pose_only_result(
+            job_id=job_id,
+            snapshot=snapshot,
+            pose_result=pose_result,
+            pose_metrics=pose_metrics,
+            preprocess_result=preprocess_result,
+            skeleton_overlay_path=skeleton_overlay_path,
+            skeleton_preview_path=skeleton_preview_path,
+            skeleton_pkg_result=skeleton_pkg_result,
+            retarget_error=str(exc),
         )
+        _schedule_pose_review(job_id)
         return
 
     # Stage: EVALUATE
@@ -226,7 +470,10 @@ async def _run_pipeline(job_id: str) -> None:
             "Evaluating trajectory quality...",
         )
         eval_result = await loop.run_in_executor(
-            None, evaluate_trajectory, retarget_result["joint_trajectory"], settings.target_robot
+            None,
+            evaluate_trajectory,
+            retarget_result["joint_trajectory"],
+            settings.target_robot,
         )
         _update_job(
             job_id,
@@ -246,81 +493,75 @@ async def _run_pipeline(job_id: str) -> None:
         )
         return
 
-    # Stage: PACKAGE
+    # Stage: PACKAGE robot dataset
     try:
         _update_job(
-            job_id, JobStatus.RUNNING, 0.88, PipelineStage.PACKAGE, "Packaging LeRobot dataset..."
+            job_id, JobStatus.RUNNING, 0.88, PipelineStage.PACKAGE, "Packaging robot dataset..."
         )
-        package_dir = out / "dataset"
+        robot_dataset_dir = out / "dataset_robot"
         metadata = {
             "job_id": job_id,
             "video": Path(video_path).name,
             "robot": retarget_result["robot"],
             "quality": eval_result,
         }
-        pkg_result = await loop.run_in_executor(
+        robot_pkg_result = await loop.run_in_executor(
             None,
             package_lerobot,
             retarget_result["joint_trajectory"],
             retarget_result["ee_trajectory"],
             metadata,
-            str(package_dir),
+            str(robot_dataset_dir),
         )
     except Exception as exc:
         _update_job(
-            job_id,
-            JobStatus.FAILED,
-            0.88,
-            PipelineStage.PACKAGE,
-            str(exc),
-            failure_reason=str(exc),
+            job_id, JobStatus.FAILED, 0.88, PipelineStage.PACKAGE, str(exc), failure_reason=str(exc)
         )
         return
 
     # Stage: FINALIZE
     try:
         _update_job(
-            job_id,
-            JobStatus.RUNNING,
-            0.92,
-            PipelineStage.FINALIZE,
-            "Rendering simulation video...",
+            job_id, JobStatus.RUNNING, 0.92, PipelineStage.FINALIZE, "Rendering simulation video..."
         )
         sim_video_path = out / "simulation.mp4"
         await loop.run_in_executor(
-            None,
-            render_simulation_video,
-            retarget_result["joint_trajectory"],
-            sim_video_path,
+            None, render_simulation_video, retarget_result["joint_trajectory"], sim_video_path
         )
 
         _update_job(
-            job_id,
-            JobStatus.RUNNING,
-            0.96,
-            PipelineStage.FINALIZE,
-            "Running static checks and AI review...",
+            job_id, JobStatus.RUNNING, 0.96, PipelineStage.FINALIZE, "Finalizing artifacts..."
         )
+        static_checks = run_static_checks(robot_dataset_dir)
 
-        static_checks = run_static_checks(package_dir)
-        ai_review_md = generate_ai_review(eval_result, retarget_result["joint_trajectory"])
-
-        ai_review_path = out / "ai_review.md"
-        ai_review_path.write_text(ai_review_md, encoding="utf-8")
-
-        # Downsample joint trajectory for visualization (max 50 points)
         traj = retarget_result["joint_trajectory"]
         step = max(1, len(traj) // 50)
         downsampled = traj[::step].tolist()
 
         result_payload = {
-            "evaluation": eval_result,
-            "package": pkg_result,
-            "output_dir": str(package_dir),
-            "simulation_video": str(sim_video_path),
+            "artifacts": _artifact_manifest(job_id, snapshot),
+            "preprocess": preprocess_result,
+            "pose": {
+                "frame_count": pose_result["frame_count"],
+                "detected_frame_count": pose_result["detected_frame_count"],
+                "detection_rate": pose_result["detection_rate"],
+                "metrics": pose_metrics,
+                "artifacts": {
+                    "overlay_video": str(skeleton_overlay_path),
+                    "preview_video": str(skeleton_preview_path),
+                },
+                "dataset": skeleton_pkg_result,
+                "review": {"status": "pending", "verdict": None},
+            },
+            "retarget": {
+                "frame_count": retarget_result["frame_count"],
+                "robot": retarget_result["robot"],
+                "evaluation": eval_result,
+                "artifacts": {"simulation_video": str(sim_video_path)},
+                "dataset": robot_pkg_result,
+                "review": {"status": "pending", "verdict": None},
+            },
             "static_checks": static_checks,
-            "ai_review": ai_review_md,
-            "ai_review_path": str(ai_review_path),
             "downsampled_trajectory": downsampled,
         }
         _update_job(
@@ -341,6 +582,9 @@ async def _run_pipeline(job_id: str) -> None:
             failure_reason=str(exc),
         )
         return
+
+    _schedule_pose_review(job_id)
+    _schedule_retarget_review(job_id, eval_result, retarget_result["joint_trajectory"])
 
 
 _queue_manager = InProcessQueueManager(
@@ -521,14 +765,102 @@ def get_simulation_video(
     return FileResponse(str(sim_path))
 
 
+@router.get("/jobs/{job_id}/artifacts", response_model=ArtifactManifestResponse)
+def get_artifacts(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Return a manifest of available artifacts and convenience URLs for one job."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return ArtifactManifestResponse(artifacts=_artifact_manifest(job_id, snapshot))
+
+
+@router.get("/jobs/{job_id}/reviews", response_model=ReviewListResponse)
+def list_reviews(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Return both stage review snapshots that currently exist for a job."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    reviews = []
+    for stage in ReviewStage:
+        if _review_store.review_exists(job_id, stage):
+            reviews.append(_review_to_response(_review_store.get_review(job_id, stage)))
+    return ReviewListResponse(reviews=reviews)
+
+
+@router.get("/jobs/{job_id}/reviews/{stage}", response_model=ReviewSnapshotResponse)
+def get_review(
+    job_id: str,
+    stage: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Return the persisted snapshot for one review stage."""
+    review_stage = _review_stage_or_404(stage)
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if not _review_store.review_exists(job_id, review_stage):
+        raise HTTPException(status_code=404, detail=f"Review '{stage}' not found")
+    return _review_to_response(_review_store.get_review(job_id, review_stage))
+
+
+@router.get("/jobs/{job_id}/reviews/{stage}/stream")
+async def stream_review(
+    job_id: str,
+    stage: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity_optional_query),
+):
+    """Stream one review stage over Server-Sent Events with persisted replay."""
+    review_stage = _review_stage_or_404(stage)
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if not _review_store.review_exists(job_id, review_stage):
+        raise HTTPException(status_code=404, detail=f"Review '{stage}' not found")
+
+    async def _event_stream():
+        import asyncio as _asyncio
+        import json as _json
+
+        sent = 0
+        while True:
+            events = _review_store.list_events(job_id, review_stage)
+            while sent < len(events):
+                event = events[sent]
+                payload = _json.dumps(event.payload, ensure_ascii=False)
+                yield f"event: {event.event}\ndata: {payload}\n\n"
+                sent += 1
+            review = _review_store.get_review(job_id, review_stage)
+            if review.status.is_terminal():
+                break
+            await _asyncio.sleep(0.25)
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
 @router.get("/jobs/{job_id}/download")
 def download_dataset(
     job_id: str, identity: SessionIdentity = Depends(require_authenticated_identity)
 ):
-    """Stream a zip archive of the pipeline output directory.
-
-    Only completed and accessible jobs may be downloaded.
-    """
+    """Stream a zip archive of the complete output directory."""
     try:
         snapshot = _job_store.get_job(job_id)
     except FileNotFoundError:
@@ -541,23 +873,32 @@ def download_dataset(
             detail=f"Job {job_id} is not complete (status: {snapshot.status.value})",
         )
 
-    output_dir = Path(snapshot.output_dir)
-    if not output_dir.exists():
-        raise HTTPException(status_code=404, detail="Output directory not found")
+    return _zip_path_response(Path(snapshot.output_dir), f"{job_id}.zip")
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in output_dir.rglob("*"):
-            if file_path.is_file():
-                arcname = file_path.relative_to(output_dir)
-                zf.write(file_path, arcname)
-    buf.seek(0)
 
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{job_id}.zip"'},
-    )
+@router.get("/jobs/{job_id}/downloads/{artifact_key}")
+def download_artifact(
+    job_id: str,
+    artifact_key: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Download a specific artifact or zipped dataset branch for a job."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    target = _artifact_path_for_key(snapshot, artifact_key)
+    if artifact_key.endswith("_zip"):
+        if not target.exists():
+            raise HTTPException(status_code=404, detail=f"Artifact '{artifact_key}' not found")
+        return _zip_path_response(target, f"{job_id}_{artifact_key}.zip")
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"Artifact '{artifact_key}' not found")
+    return FileResponse(str(target))
 
 
 @router.delete("/jobs/{job_id}")

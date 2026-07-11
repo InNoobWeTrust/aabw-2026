@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.auth import create_access_token
-from backend.routes import _job_store, _queue_manager
+from backend.routes import _job_store, _queue_manager, _review_store
 from backend.server import create_app
 from domain.auth import SessionIdentity
 from domain.enums import JobStatus, PipelineStage, UserRole
@@ -25,8 +25,9 @@ def client(monkeypatch):
 
 
 def test_video_endpoints_access_control(client, tmp_path, monkeypatch):
-    # Mock jobs directory in job store to point to tmp_path
+    # Mock jobs directory in stores to point to tmp_path
     monkeypatch.setattr(_job_store, "_root", tmp_path)
+    monkeypatch.setattr(_review_store, "_jobs_root", tmp_path)
 
     job_id = "test-job-uuid-1"
     session_id = "session-uuid-1"
@@ -107,3 +108,103 @@ def test_video_endpoints_access_control(client, tmp_path, monkeypatch):
     # 6. Unauthenticated request gets 401
     res = client.get(f"/api/jobs/{job_id}/video/original")
     assert res.status_code == 401
+
+
+def test_artifact_and_review_endpoints(client, tmp_path, monkeypatch):
+    """Artifact manifest, fine-grained downloads, and review snapshots should be accessible."""
+    monkeypatch.setattr(_job_store, "_root", tmp_path)
+    monkeypatch.setattr(_review_store, "_jobs_root", tmp_path)
+
+    job_id = "test-job-uuid-2"
+    session_id = "session-uuid-2"
+
+    job_dir = tmp_path / job_id
+    (job_dir / "upload").mkdir(parents=True)
+    (job_dir / "output" / "dataset_skeleton").mkdir(parents=True)
+    (job_dir / "output" / "dataset_robot").mkdir(parents=True)
+    (job_dir / "output" / "reviews" / "pose").mkdir(parents=True)
+
+    video_file = job_dir / "upload" / "input.mp4"
+    video_file.write_text("original")
+    (job_dir / "output" / "skeleton_overlay.mp4").write_text("overlay")
+    (job_dir / "output" / "skeleton_preview.mp4").write_text("preview")
+    (job_dir / "output" / "simulation.mp4").write_text("simulation")
+    (job_dir / "output" / "dataset_skeleton" / "meta.json").write_text("{}")
+    (job_dir / "output" / "dataset_robot" / "meta.json").write_text("{}")
+    (job_dir / "output" / "reviews" / "pose" / "review.md").write_text("# Pose review")
+    (job_dir / "output" / "reviews" / "pose" / "review.json").write_text(
+        """{
+  \"job_id\": \"test-job-uuid-2\",
+  \"review_stage\": \"pose\",
+  \"status\": \"completed\",
+  \"provider\": \"featherless\",
+  \"sandbox\": \"daytona\",
+  \"started_at\": \"2026-07-11T00:00:00Z\",
+  \"completed_at\": \"2026-07-11T00:00:01Z\",
+  \"verdict\": \"approved\",
+  \"summary\": \"ok\",
+  \"markdown_path\": \"pose/review.md\",
+  \"json_path\": \"pose/payload.json\",
+  \"error\": null,
+  \"context_manifest\": {},
+  \"metadata\": {}
+}
+"""
+    )
+    (job_dir / "output" / "reviews" / "pose" / "events.jsonl").write_text(
+        '{"at":"2026-07-11T00:00:00Z","job_id":"test-job-uuid-2","review_stage":"pose","event":"status","payload":{"status":"completed"}}\n'
+    )
+
+    owner = JobOwner(role=UserRole.JUDGE, judge_session_id=session_id)
+    snapshot = JobSnapshot(
+        job_id=job_id,
+        owner=owner,
+        original_filename="input.mp4",
+        upload_path=str(video_file),
+        output_dir=str(job_dir / "output"),
+        status=JobStatus.COMPLETED,
+        stage=PipelineStage.FINALIZE,
+        progress=1.0,
+        message="Completed",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+        result={"pose": {"metrics": {"detection_rate": 1.0}}},
+    )
+    (job_dir / "job.json").write_text(snapshot.model_dump_json(by_alias=True))
+
+    judge_token = create_access_token(
+        SessionIdentity(role=UserRole.JUDGE, judge_session_id=session_id)
+    )
+
+    manifest = client.get(
+        f"/api/jobs/{job_id}/artifacts", headers={"Authorization": f"Bearer {judge_token}"}
+    )
+    assert manifest.status_code == 200
+    assert "dataset_skeleton_zip_url" in manifest.json()["artifacts"]
+
+    reviews = client.get(
+        f"/api/jobs/{job_id}/reviews", headers={"Authorization": f"Bearer {judge_token}"}
+    )
+    assert reviews.status_code == 200
+    assert reviews.json()["reviews"][0]["review_stage"] == "pose"
+
+    review = client.get(
+        f"/api/jobs/{job_id}/reviews/pose", headers={"Authorization": f"Bearer {judge_token}"}
+    )
+    assert review.status_code == 200
+    assert review.json()["verdict"] == "approved"
+
+    download = client.get(
+        f"/api/jobs/{job_id}/downloads/skeleton_overlay_video",
+        headers={"Authorization": f"Bearer {judge_token}"},
+    )
+    assert download.status_code == 200
+    assert download.text == "overlay"
+
+    zipped = client.get(
+        f"/api/jobs/{job_id}/downloads/dataset_skeleton_zip",
+        headers={"Authorization": f"Bearer {judge_token}"},
+    )
+    assert zipped.status_code == 200
+    assert zipped.headers["content-type"] == "application/zip"

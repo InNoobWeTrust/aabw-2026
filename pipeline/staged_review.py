@@ -1,4 +1,9 @@
-"""Static code verification and AI Agent Reviewer for retargeted datasets."""
+"""Static dataset verification and deterministic review generators.
+
+This module currently provides review fallbacks that can run without external
+LLM credentials. They are used by the async review orchestration layer when the
+Featherless + Daytona execution path is not configured.
+"""
 
 import json
 from pathlib import Path
@@ -129,7 +134,7 @@ def run_static_checks(output_dir: str | Path) -> dict:
 
 
 def generate_ai_review(eval_result: dict, joint_trajectory: np.ndarray) -> str:
-    """Generate a detailed, robotics-focused AI Reviewer report in Markdown format.
+    """Generate a deterministic retarget-stage review report in Markdown format.
 
     Args:
         eval_result: Dictionary of metrics from evaluate_trajectory.
@@ -248,7 +253,7 @@ def generate_ai_review(eval_result: dict, joint_trajectory: np.ndarray) -> str:
     )
 
     # Compile Markdown Report
-    report = f"""# AI Agent Review Report
+    report = f"""# Robot Retarget Review Report
 
 ## Verification Status: {status_banner}
 
@@ -286,3 +291,111 @@ def generate_ai_review(eval_result: dict, joint_trajectory: np.ndarray) -> str:
 {recs_md}
 """
     return report
+
+
+def generate_pose_review(metrics: dict, artifact_manifest: dict) -> tuple[str, dict]:
+    """Generate a deterministic pose-stage review and structured payload."""
+    detection_rate = float(metrics.get("detection_rate", 0.0))
+    avg_visibility = float(metrics.get("average_visibility", 0.0))
+    missing_ratio = float(metrics.get("missing_landmark_ratio", 1.0))
+    wrists = metrics.get("keypoints", {})
+    left_wrist = wrists.get("left_wrist", {})
+    right_wrist = wrists.get("right_wrist", {})
+    wrist_jitter = max(
+        float(left_wrist.get("temporal_jitter", 0.0)),
+        float(right_wrist.get("temporal_jitter", 0.0)),
+    )
+
+    if detection_rate >= 0.9 and missing_ratio <= 0.2 and wrist_jitter <= 0.08:
+        verdict = "approved"
+        status_banner = "🟢 APPROVED"
+        summary = "Pose extraction is stable enough to preserve and use the skeleton-stage dataset."
+    elif detection_rate >= 0.6 and missing_ratio <= 0.5:
+        verdict = "needs_review"
+        status_banner = "🟡 NEEDS REVIEW"
+        summary = (
+            "Pose extraction produced usable motion traces, but landmark stability is borderline."
+        )
+    else:
+        verdict = "rejected"
+        status_banner = "🔴 REJECTED"
+        summary = (
+            "Pose extraction is too unstable for confident downstream use without "
+            "manual inspection."
+        )
+
+    detection_status = (
+        "✅ Pass" if detection_rate >= 0.9 else "⚠️ Warning" if detection_rate >= 0.6 else "❌ Fail"
+    )
+    visibility_status = (
+        "✅ Pass" if avg_visibility >= 0.6 else "⚠️ Warning" if avg_visibility >= 0.4 else "❌ Fail"
+    )
+    missing_status = (
+        "✅ Pass" if missing_ratio <= 0.2 else "⚠️ Warning" if missing_ratio <= 0.5 else "❌ Fail"
+    )
+    jitter_status = (
+        "✅ Pass" if wrist_jitter <= 0.08 else "⚠️ Warning" if wrist_jitter <= 0.16 else "❌ Fail"
+    )
+
+    recommendations = []
+    if detection_rate < 0.9:
+        recommendations.append(
+            "- Improve camera framing and keep the subject fully visible for the full clip."
+        )
+    if missing_ratio > 0.2:
+        recommendations.append(
+            "- Reduce self-occlusion and background clutter so landmark confidence stays high."
+        )
+    if wrist_jitter > 0.08:
+        recommendations.append(
+            "- Use a more stable recording or stronger temporal smoothing before retargeting."
+        )
+    if not recommendations:
+        recommendations.append("- No major pose-stage issues detected.")
+
+    recommendations_md = "\n".join(recommendations)
+    report = f"""# Pose Extraction Review Report
+
+## Verification Status: {status_banner}
+
+{summary}
+
+---
+
+## Pose Quality Summary
+
+| Metric | Measured Value | Target | Status |
+| :--- | :--- | :--- | :--- |
+| **Detection Rate** | {detection_rate:.1%} | > 90% | {detection_status} |
+| **Average Visibility** | {avg_visibility:.3f} | > 0.60 | {visibility_status} |
+| **Missing Landmark Ratio** | {missing_ratio:.1%} | < 20% | {missing_status} |
+| **Max Wrist Jitter** | {wrist_jitter:.4f} | < 0.08 | {jitter_status} |
+
+---
+
+## Artifact Coverage
+
+- Skeleton overlay: `{artifact_manifest.get("skeleton_overlay_video", "n/a")}`
+- Skeleton preview: `{artifact_manifest.get("skeleton_preview_video", "n/a")}`
+- Skeleton dataset: `{artifact_manifest.get("dataset_skeleton_dir", "n/a")}`
+
+---
+
+## Recommendations
+
+{recommendations_md}
+"""
+    payload = {
+        "stage": "pose",
+        "verdict": verdict,
+        "summary": summary,
+        "metrics": {
+            "detection_rate": detection_rate,
+            "average_visibility": avg_visibility,
+            "missing_landmark_ratio": missing_ratio,
+            "max_wrist_jitter": wrist_jitter,
+        },
+        "artifact_manifest": artifact_manifest,
+        "markdown": report,
+    }
+    return report, payload
