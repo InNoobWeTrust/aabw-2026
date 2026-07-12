@@ -66,6 +66,8 @@ interface SessionListResponse {
   sessions: Array<{ session_id: string }>;
 }
 
+type EditorSource = "checkpoint" | "tuned";
+
 interface OrchestratorPanelProps {
   jobId: string;
   token: string;
@@ -88,12 +90,14 @@ export default function OrchestratorPanel({
   const [isRestoring, setIsRestoring] = useState(false);
   const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
   const [draftSummary, setDraftSummary] = useState("");
+  const [editorSource, setEditorSource] = useState<EditorSource>("checkpoint");
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     setTraceEntries([]);
     setDraftSummary("");
+    setEditorSource("checkpoint");
     closeStream();
     void fetchSnapshot();
     void fetchLatestSession();
@@ -127,6 +131,37 @@ export default function OrchestratorPanel({
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
+    }
+  };
+
+  const tunedProfileJson = snapshot?.tuned_mapping_profile
+    ? JSON.stringify(snapshot.tuned_mapping_profile, null, 2)
+    : "";
+  const hasTunedProfile = Boolean(snapshot?.tuned_mapping_profile);
+
+  const syncEditorToSource = (
+    source: EditorSource,
+    nextSession: MappingSession | null,
+    nextSnapshot: OrchestrationUiSnapshot | null,
+  ) => {
+    if (source === "tuned") {
+      const nextTunedProfile = nextSnapshot?.tuned_mapping_profile;
+      if (nextTunedProfile) {
+        setMappingJson(JSON.stringify(nextTunedProfile, null, 2));
+        return;
+      }
+      setEditorSource("checkpoint");
+    }
+
+    const currentCheckpoint = nextSession?.checkpoints.find(
+      (checkpoint) => checkpoint.checkpoint_id === nextSession.session.current_checkpoint_id,
+    );
+    if (currentCheckpoint) {
+      setMappingJson(JSON.stringify(currentCheckpoint.mapping_profile, null, 2));
+      return;
+    }
+    if (!nextSession?.checkpoints.length) {
+      setMappingJson("");
     }
   };
 
@@ -330,6 +365,7 @@ export default function OrchestratorPanel({
       if (res.ok) {
         const data = (await res.json()) as OrchestrationSnapshotResponse;
         setSnapshot(data);
+        syncEditorToSource(editorSource, mappingSession, data);
         if (data.summary) {
           setDraftSummary(data.summary);
         }
@@ -379,13 +415,7 @@ export default function OrchestratorPanel({
 
       const detail = (await detailRes.json()) as MappingSession;
       setMappingSession(detail);
-      const currentCheckpoint = detail.checkpoints.find(
-        (checkpoint) =>
-          checkpoint.checkpoint_id === detail.session.current_checkpoint_id,
-      );
-      if (currentCheckpoint) {
-        setMappingJson(JSON.stringify(currentCheckpoint.mapping_profile, null, 2));
-      }
+      syncEditorToSource(editorSource, detail, snapshot);
     } catch {
       setSessionError("Mapping session unavailable.");
     } finally {
@@ -413,9 +443,7 @@ export default function OrchestratorPanel({
 
     const detail = (await res.json()) as MappingSession;
     setMappingSession(detail);
-    if (detail.checkpoints[0]) {
-      setMappingJson(JSON.stringify(detail.checkpoints[0].mapping_profile, null, 2));
-    }
+    syncEditorToSource(editorSource, detail, snapshot);
     return detail.session.session_id;
   };
 
@@ -490,6 +518,8 @@ export default function OrchestratorPanel({
       if (res.ok) {
         const detail = (await res.json()) as MappingSession;
         setMappingSession(detail);
+        setEditorSource("checkpoint");
+        syncEditorToSource("checkpoint", detail, snapshot);
         pushFeedback("Manual checkpoint saved.");
       } else if (res.status === 404) {
         pushFeedback("Mapping session endpoint is not available yet.");
@@ -524,12 +554,8 @@ export default function OrchestratorPanel({
       if (res.ok) {
         const detail = (await res.json()) as MappingSession;
         setMappingSession(detail);
-        const restored = detail.checkpoints.find(
-          (checkpoint) => checkpoint.checkpoint_id === checkpointId,
-        );
-        if (restored) {
-          setMappingJson(JSON.stringify(restored.mapping_profile, null, 2));
-        }
+        setEditorSource("checkpoint");
+        syncEditorToSource("checkpoint", detail, snapshot);
         pushFeedback(`Restored checkpoint ${checkpointId.slice(0, 8)}.`);
       } else if (res.status === 404) {
         pushFeedback("Restore endpoint is not available yet.");
@@ -782,13 +808,56 @@ export default function OrchestratorPanel({
       </div>
 
       <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/20 p-4">
-        <div className="flex items-center justify-between">
-          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-            Manual Mapping Editor
-          </h4>
-          <span className="text-[10px] text-slate-500">
-            Save as a reversible checkpoint
-          </span>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+              Manual Mapping Editor
+            </h4>
+            <span className="text-[10px] text-slate-500">
+              Save as a reversible checkpoint
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setEditorSource("checkpoint");
+                syncEditorToSource("checkpoint", mappingSession, snapshot);
+              }}
+              className={`rounded border px-2 py-1 text-[10px] font-semibold transition-colors ${
+                editorSource === "checkpoint"
+                  ? "border-accent/40 bg-accent-dim text-accent"
+                  : "border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+              }`}
+            >
+              Current checkpoint
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!hasTunedProfile) {
+                  return;
+                }
+                setEditorSource("tuned");
+                syncEditorToSource("tuned", mappingSession, snapshot);
+              }}
+              disabled={!hasTunedProfile}
+              className={`rounded border px-2 py-1 text-[10px] font-semibold transition-colors ${
+                editorSource === "tuned"
+                  ? "border-cyan-500/40 bg-cyan-500/10 text-cyan-200"
+                  : "border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+              }`}
+              title={hasTunedProfile ? "View orchestrator-tuned profile" : "No tuned profile suggested yet"}
+            >
+              Tuned profile
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-[11px] text-slate-400">
+          {editorSource === "tuned" && tunedProfileJson
+            ? "Viewing the orchestrator-suggested tuned profile. Edit it here, then save a manual checkpoint if you want to keep a variant."
+            : "Viewing the current checkpoint profile. Switch to the tuned profile when orchestration suggests one."}
         </div>
 
         <textarea
