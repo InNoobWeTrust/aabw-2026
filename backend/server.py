@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -24,11 +25,25 @@ class SPAStaticFiles(StaticFiles):
 
     async def get_response(self, path: str, scope):
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             if exc.status_code == 404:
                 raise
             raise
+        _apply_cache_control_headers(response, path)
+        return response
+
+
+def _apply_cache_control_headers(response: Response, path: str) -> None:
+    """Apply safe cache policy for SPA HTML versus versioned static assets."""
+    normalized = path.lstrip("/")
+    if normalized in {"", "."} or normalized.endswith(".html") or normalized.endswith(".txt"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        return
+    if normalized.startswith("_next/static/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return
+    response.headers["Cache-Control"] = "public, max-age=3600"
 
 
 def create_app() -> FastAPI:
@@ -57,8 +72,6 @@ def create_app() -> FastAPI:
 
         _queue_manager.start()
 
-    from fastapi.responses import FileResponse, JSONResponse
-
     frontend_out = Path("frontend/out")
     frontend_index = frontend_out / "index.html"
 
@@ -68,7 +81,9 @@ def create_app() -> FastAPI:
         if path.startswith("/api") or "." in path.split("/")[-1]:
             return JSONResponse(status_code=404, content={"detail": "Not found"})
         if frontend_index.exists():
-            return FileResponse(str(frontend_index))
+            response = FileResponse(str(frontend_index))
+            _apply_cache_control_headers(response, "index.html")
+            return response
         return JSONResponse(
             status_code=404,
             content={"detail": "Frontend bundle not built yet"},
@@ -77,7 +92,10 @@ def create_app() -> FastAPI:
     if frontend_out.exists():
         app.mount("/", SPAStaticFiles(directory=str(frontend_out), html=False), name="frontend")
     else:
-        _logger.warning("Frontend bundle directory %s is missing; skipping static mount", frontend_out)
+        _logger.warning(
+            "Frontend bundle directory %s is missing; skipping static mount",
+            frontend_out,
+        )
 
     return app
 
