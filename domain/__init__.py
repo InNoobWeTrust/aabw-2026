@@ -31,11 +31,17 @@ from domain.enums import (
     OrchestrationStatus,
     PipelineStage,
     QualityGrade,
+    RerunStatus,
     UserRole,
 )
 from domain.jobs import JobEvent, JobOwner, JobProgress, JobSnapshot
 from domain.mapping import AxisMapping, MappingProfile
-from domain.mapping_session import MappingCheckpoint, MappingSession, MappingSessionEvent
+from domain.mapping_session import (
+    MappingCheckpoint,
+    MappingSession,
+    MappingSessionEvent,
+    RerunRecord,
+)
 from domain.orchestration import (
     CaptureGuidancePayload,
     OrchestrationDonePayload,
@@ -77,6 +83,8 @@ __all__ = [
     "OrchestrationTracePayload",
     "PipelineStage",
     "QualityGrade",
+    "RerunRecord",
+    "RerunStatus",
     "SessionIdentity",
     "UserRole",
 ]

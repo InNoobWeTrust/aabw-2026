@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from domain.enums import CheckpointAuthor, MappingSessionStatus
+from domain.enums import CheckpointAuthor, MappingSessionStatus, RerunStatus
 from domain.mapping import MappingProfile
 
 
@@ -37,6 +37,9 @@ class MappingSession(BaseModel):
     job_id: str
     status: MappingSessionStatus
     current_checkpoint_id: str | None = None
+    active_rerun_id: str | None = None
+    latest_rerun_id: str | None = None
+    latest_completed_rerun_id: str | None = None
     created_at: datetime
     updated_at: datetime
     title: str | None = None
@@ -51,3 +54,33 @@ class MappingSessionEvent(BaseModel):
     session_id: str
     event: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class RerunArtifactManifest(BaseModel):
+    """Persisted manifest of artifacts produced by one rerun execution."""
+
+    rerun_id: str
+    session_id: str
+    job_id: str
+    version: int
+    artifacts: dict[str, Any] = Field(default_factory=dict)
+    updated_at: datetime | None = None
+
+
+class RerunRecord(BaseModel):
+    """A single versioned pipeline rerun triggered from a restored checkpoint."""
+
+    rerun_id: str
+    version: int
+    job_id: str
+    session_id: str
+    source_checkpoint_id: str
+    status: RerunStatus
+    mapping_profile: MappingProfile
+    artifact_manifest: RerunArtifactManifest | None = None
+    summary: str | None = None
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)

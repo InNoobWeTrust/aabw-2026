@@ -4,6 +4,8 @@ Enums (JobStatus, PipelineStage, UserRole, QualityGrade) are imported from domai
 — backend.models is the HTTP boundary layer and must not redefine domain types.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -20,6 +22,7 @@ from domain.enums import (
     OrchestrationDecision,
     OrchestrationStatus,
     PipelineStage,
+    RerunStatus,
     ReviewStage,
     ReviewStatus,
     ReviewVerdict,
@@ -238,6 +241,9 @@ class MappingSessionResponse(BaseModel):
     session_id: str
     status: MappingSessionStatus
     current_checkpoint_id: str | None = None
+    active_rerun_id: str | None = None
+    latest_rerun_id: str | None = None
+    latest_completed_rerun_id: str | None = None
     created_at: datetime
     updated_at: datetime
     title: str | None = None
@@ -263,9 +269,42 @@ class MappingSessionDetailResponse(BaseModel):
 
     session: MappingSessionResponse
     checkpoints: list[MappingCheckpointResponse]
+    reruns: list[RerunResponse] = Field(default_factory=list)
 
 
 class MappingSessionListResponse(BaseModel):
     """Wrapper for listing mapping sessions attached to a job."""
 
     sessions: list[MappingSessionResponse]
+
+
+class RerunTriggerRequest(BaseModel):
+    """Trigger a versioned pipeline rerun from a restored checkpoint."""
+
+    checkpoint_id: str | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class RerunResponse(BaseModel):
+    """Public-facing checkpoint-triggered rerun."""
+
+    rerun_id: str
+    version: int
+    job_id: str
+    session_id: str
+    source_checkpoint_id: str
+    status: RerunStatus
+    mapping_profile: dict
+    artifact_manifest: dict | None = None
+    summary: str | None = None
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class RerunListResponse(BaseModel):
+    """Wrapper for listing reruns under a mapping session."""
+
+    reruns: list[RerunResponse]

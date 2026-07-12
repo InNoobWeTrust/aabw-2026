@@ -77,6 +77,34 @@ class MappingSessionService:
         """Archive a session so no further edits can be made."""
         return self._session_store.archive_session(job_id, session_id)
 
+    def active_rerun_blocked(self, job_id: str, session_id: str) -> str | None:
+        """Return a human-readable reason if rerun cannot be triggered, or None if it can.
+
+        A rerun is blocked when the session already has an active (queued or
+        running) rerun. This prevents concurrent re-execution over the same
+        session state.
+        """
+        session = self._session_store.get_session(job_id, session_id)
+        if session.status == MappingSessionStatus.ARCHIVED:
+            return f"Session {session_id} is archived and does not accept new reruns"
+        if session.status == MappingSessionStatus.FAILED:
+            return f"Session {session_id} has failed and does not accept new reruns"
+        if session.active_rerun_id is None:
+            return None
+        from backend.checkpoint_rerun_store import FileSystemCheckpointRerunStore
+
+        rerun_store = FileSystemCheckpointRerunStore(self._session_store._jobs_root)
+        try:
+            active_rerun = rerun_store.get_rerun(job_id, session_id, session.active_rerun_id)
+        except FileNotFoundError:
+            return None
+        if active_rerun.status.is_active():
+            return (
+                f"Rerun {active_rerun.rerun_id} (v{active_rerun.version}) "
+                f"is still {active_rerun.status.value}"
+            )
+        return None
+
     def _current_job_mapping_profile(self, job_id: str) -> MappingProfile:
         """Extract the job's current mapping profile or return a default."""
         snapshot = self._job_store.get_job(job_id)

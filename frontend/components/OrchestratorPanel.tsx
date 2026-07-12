@@ -6,11 +6,14 @@ import {
   Bot,
   Check,
   ChevronRight,
+  Clock,
+  GitBranch,
   Loader2,
   Play,
   RotateCcw,
   Save,
   Wrench,
+  XCircle,
 } from "lucide-react";
 
 import {
@@ -52,14 +55,41 @@ interface MappingCheckpoint {
   mapping_profile: Record<string, unknown>;
 }
 
+interface RerunResponse {
+  rerun_id: string;
+  version: number;
+  job_id: string;
+  session_id: string;
+  source_checkpoint_id: string;
+  status: string;
+  mapping_profile: Record<string, unknown>;
+  artifact_manifest: Record<string, unknown> | null;
+  summary: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  metadata: Record<string, unknown>;
+}
+
+interface RerunListResponse {
+  reruns: RerunResponse[];
+}
+
+interface MappingSessionSession {
+  session_id: string;
+  current_checkpoint_id?: string | null;
+  status: string;
+  title?: string | null;
+  active_rerun_id?: string | null;
+  latest_rerun_id?: string | null;
+  latest_completed_rerun_id?: string | null;
+}
+
 interface MappingSession {
-  session: {
-    session_id: string;
-    current_checkpoint_id?: string | null;
-    status: string;
-    title?: string | null;
-  };
+  session: MappingSessionSession;
   checkpoints: MappingCheckpoint[];
+  reruns?: RerunResponse[];
 }
 
 interface SessionListResponse {
@@ -91,14 +121,21 @@ export default function OrchestratorPanel({
   const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
   const [draftSummary, setDraftSummary] = useState("");
   const [editorSource, setEditorSource] = useState<EditorSource>("checkpoint");
+  const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(
+    null,
+  );
+  const [reruns, setReruns] = useState<RerunResponse[]>([]);
+  const [isTriggeringRerun, setIsTriggeringRerun] = useState(false);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const rerunPollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     setTraceEntries([]);
     setDraftSummary("");
     setEditorSource("checkpoint");
     closeStream();
+    stopRerunPoller();
     void fetchSnapshot();
     void fetchLatestSession();
     return () => {
@@ -106,6 +143,7 @@ export default function OrchestratorPanel({
         clearTimeout(feedbackTimer.current);
       }
       closeStream();
+      stopRerunPoller();
     };
   }, [jobId]);
 
@@ -381,6 +419,13 @@ export default function OrchestratorPanel({
     }
   };
 
+  const stopRerunPoller = () => {
+    if (rerunPollerRef.current) {
+      clearInterval(rerunPollerRef.current);
+      rerunPollerRef.current = null;
+    }
+  };
+
   const fetchLatestSession = async () => {
     setIsLoadingSession(true);
     setSessionError(null);
@@ -415,6 +460,7 @@ export default function OrchestratorPanel({
 
       const detail = (await detailRes.json()) as MappingSession;
       setMappingSession(detail);
+      setReruns(detail.reruns ?? []);
       syncEditorToSource(editorSource, detail, snapshot);
     } catch {
       setSessionError("Mapping session unavailable.");
@@ -422,6 +468,26 @@ export default function OrchestratorPanel({
       setIsLoadingSession(false);
     }
   };
+
+  useEffect(() => {
+    const activeRerunId = mappingSession?.session?.active_rerun_id;
+    if (!activeRerunId) {
+      stopRerunPoller();
+      return;
+    }
+
+    if (rerunPollerRef.current) {
+      return;
+    }
+
+    rerunPollerRef.current = setInterval(() => {
+      void fetchLatestSession();
+    }, 3000);
+
+    return () => {
+      stopRerunPoller();
+    };
+  }, [mappingSession?.session?.active_rerun_id]);
 
   const ensureSession = async () => {
     if (mappingSession) {
@@ -443,6 +509,8 @@ export default function OrchestratorPanel({
 
     const detail = (await res.json()) as MappingSession;
     setMappingSession(detail);
+    setReruns(detail.reruns ?? []);
+    setSelectedCheckpointId(detail.session.current_checkpoint_id ?? null);
     syncEditorToSource(editorSource, detail, snapshot);
     return detail.session.session_id;
   };
@@ -518,7 +586,9 @@ export default function OrchestratorPanel({
       if (res.ok) {
         const detail = (await res.json()) as MappingSession;
         setMappingSession(detail);
+        setReruns(detail.reruns ?? []);
         setEditorSource("checkpoint");
+        setSelectedCheckpointId(detail.session.current_checkpoint_id ?? null);
         syncEditorToSource("checkpoint", detail, snapshot);
         pushFeedback("Manual checkpoint saved.");
       } else if (res.status === 404) {
@@ -554,7 +624,9 @@ export default function OrchestratorPanel({
       if (res.ok) {
         const detail = (await res.json()) as MappingSession;
         setMappingSession(detail);
+        setReruns(detail.reruns ?? []);
         setEditorSource("checkpoint");
+        setSelectedCheckpointId(checkpointId);
         syncEditorToSource("checkpoint", detail, snapshot);
         pushFeedback(`Restored checkpoint ${checkpointId.slice(0, 8)}.`);
       } else if (res.status === 404) {
@@ -568,6 +640,64 @@ export default function OrchestratorPanel({
       setIsRestoring(false);
     }
   };
+
+  const handleTriggerRerun = async () => {
+    if (!selectedCheckpointId) {
+      pushFeedback("Save or restore a checkpoint first to use as the rerun source.");
+      return;
+    }
+
+    let sessionId = mappingSession?.session.session_id;
+    try {
+      sessionId = await ensureSession();
+    } catch {
+      pushFeedback("Cannot create mapping session.");
+      return;
+    }
+
+    if (!sessionId) {
+      return;
+    }
+
+    setIsTriggeringRerun(true);
+    try {
+      const res = await fetch(
+        `/api/jobs/${jobId}/mapping-sessions/${sessionId}/reruns`,
+        {
+          method: "POST",
+          headers: {
+            ...authHeaders,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ checkpoint_id: selectedCheckpointId }),
+        },
+      );
+
+      if (res.ok) {
+        const rerun = (await res.json()) as RerunResponse;
+        setReruns((previous) => [rerun, ...previous]);
+        setSelectedCheckpointId(null);
+        pushFeedback(`Rerun v${rerun.version} triggered.`);
+        void fetchLatestSession();
+      } else if (res.status === 404) {
+        pushFeedback("Rerun endpoint is not available yet.");
+      } else if (res.status === 409) {
+        const data = await res.json().catch(() => ({}));
+        pushFeedback(data.detail || "Another rerun is already active.");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        pushFeedback(data.detail || "Failed to trigger rerun.");
+      }
+    } catch {
+      pushFeedback("Cannot reach rerun endpoint.");
+    } finally {
+      setIsTriggeringRerun(false);
+    }
+  };
+
+  const completedRerun = reruns.find(
+    (r) => r.rerun_id === mappingSession?.session?.latest_completed_rerun_id,
+  );
 
   return (
     <div className="flex flex-col gap-4 overflow-y-auto">
@@ -887,6 +1017,193 @@ export default function OrchestratorPanel({
             </>
           )}
         </button>
+
+        {selectedCheckpointId && (
+          <div className="flex items-center justify-between rounded-lg border border-accent/20 bg-accent-dim px-3 py-2 text-xs">
+            <span className="text-accent">
+              Checkpoint {selectedCheckpointId.slice(0, 8)} selected as rerun source
+            </span>
+            <button
+              onClick={() => void handleTriggerRerun()}
+              disabled={isTriggeringRerun}
+              className="flex shrink-0 items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-[10px] font-bold text-slate-950 transition-colors hover:bg-accent-hover disabled:opacity-50"
+            >
+              {isTriggeringRerun ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Triggering...
+                </>
+              ) : (
+                <>
+                  <GitBranch className="h-3 w-3" />
+                  Trigger Rerun
+                </>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/20 p-4">
+        <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-300">
+          <GitBranch className="h-3.5 w-3.5" />
+          Rerun Comparison
+        </h4>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 text-xs">
+          <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              Orchestrator Baseline
+            </div>
+            <p className="mt-1 text-slate-300">
+              {snapshot?.decision ? (
+                <>
+                  {snapshot.decision}
+                  {snapshot.metadata?.confidence != null
+                    ? ` (${Math.round(Number(snapshot.metadata.confidence) * 100)}%)`
+                    : ""}
+                </>
+              ) : (
+                "No orchestration run yet"
+              )}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              Latest Rerun
+            </div>
+            {completedRerun ? (
+              <p className="mt-1 text-slate-300">
+                v{completedRerun.version} ·{" "}
+                <span className={`font-semibold ${
+                  completedRerun.status === "completed" ? "text-emerald-400" :
+                  completedRerun.status === "failed" ? "text-red-400" :
+                  "text-amber-400"
+                }`}>
+                  {completedRerun.status}
+                </span>
+                {completedRerun.summary ? (
+                  <> &mdash; {completedRerun.summary.slice(0, 60)}</>
+                ) : null}
+              </p>
+            ) : mappingSession?.session?.active_rerun_id ? (
+              <p className="mt-1 flex items-center gap-1.5 text-amber-400">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Rerun in progress
+              </p>
+            ) : (
+              <p className="mt-1 text-slate-500">No reruns yet</p>
+            )}
+          </div>
+        </div>
+
+        {(completedRerun?.summary || completedRerun?.status) && (
+          <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
+              Rerun Detail
+            </div>
+            {completedRerun?.summary && (
+              <p className="text-slate-300 leading-relaxed">
+                {completedRerun.summary}
+              </p>
+            )}
+            {completedRerun?.error && (
+              <p className="mt-1 text-red-400">{completedRerun.error}</p>
+            )}
+            {completedRerun?.completed_at && (
+              <p className="mt-1 flex items-center gap-1 text-slate-500">
+                <Clock className="h-3 w-3" />
+                Completed {new Date(completedRerun.completed_at).toLocaleString()}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/20 p-4">
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+            Rerun Timeline
+          </h4>
+          <span className="text-[10px] text-slate-500">
+            {reruns.length} rerun{reruns.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        {mappingSession?.session?.active_rerun_id ? (
+          <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+            Rerun active — polling for updates...
+          </div>
+        ) : null}
+
+        {reruns.length ? (
+          <ul className="flex max-h-64 flex-col gap-2 overflow-y-auto pr-0.5 text-xs">
+            {reruns.map((rerun) => {
+              const StatusIcon =
+                rerun.status === "completed"
+                  ? Check
+                  : rerun.status === "failed"
+                    ? XCircle
+                    : rerun.status === "running"
+                      ? Loader2
+                      : Clock;
+              const statusColor =
+                rerun.status === "completed"
+                  ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-300"
+                  : rerun.status === "failed"
+                    ? "border-red-500/20 bg-red-500/5 text-red-300"
+                    : rerun.status === "running" || rerun.status === "queued"
+                      ? "border-amber-500/20 bg-amber-500/5 text-amber-300"
+                      : "border-slate-700 bg-slate-900 text-slate-400";
+              const iconClass =
+                rerun.status === "running"
+                  ? "mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin"
+                  : "mt-0.5 h-3.5 w-3.5 shrink-0";
+
+              return (
+                <li
+                  key={rerun.rerun_id}
+                  className={`rounded-lg border px-3 py-2 ${statusColor}`}
+                >
+                  <div className="flex items-start gap-2">
+                    <StatusIcon className={iconClass} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold">v{rerun.version}</span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wide opacity-80">
+                          {rerun.status}
+                        </span>
+                        <span className="text-[10px] opacity-60">
+                          src:{rerun.source_checkpoint_id.slice(0, 8)}
+                        </span>
+                      </div>
+                      {rerun.summary || rerun.error ? (
+                        <p className="mt-1 leading-relaxed opacity-90">
+                          {rerun.summary || rerun.error}
+                        </p>
+                      ) : rerun.status !== "running" ? (
+                        <p className="mt-1 text-slate-500">No summary available</p>
+                      ) : null}
+                      <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] opacity-60">
+                        <span>Created {new Date(rerun.created_at).toLocaleString()}</span>
+                        {rerun.completed_at ? (
+                          <span>
+                            Completed {new Date(rerun.completed_at).toLocaleString()}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="text-xs italic text-slate-500">
+            Trigger a rerun from a saved or restored checkpoint to see versioned results here.
+          </p>
+        )}
       </div>
     </div>
   );

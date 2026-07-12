@@ -25,6 +25,8 @@ from backend.auth import (
 )
 from backend.calibration_service import CalibrationService, build_mapping_calibration_factory
 from backend.calibration_store import FileSystemCalibrationStore
+from backend.checkpoint_rerun_service import CheckpointRerunService
+from backend.checkpoint_rerun_store import FileSystemCheckpointRerunStore
 from backend.config import settings
 from backend.job_store import FileSystemJobStore
 from backend.mapping_session_service import MappingSessionService
@@ -49,6 +51,9 @@ from backend.models import (
     MappingSessionListResponse,
     MappingSessionResponse,
     OrchestrationSnapshotResponse,
+    RerunListResponse,
+    RerunResponse,
+    RerunTriggerRequest,
     ReviewListResponse,
     ReviewSnapshotResponse,
     SessionSummary,
@@ -73,7 +78,7 @@ from domain.calibration import CalibrationSnapshot
 from domain.enums import AssistantSessionStatus, JobStatus, PipelineStage, ReviewStage
 from domain.jobs import JobEvent, JobOwner, JobSnapshot
 from domain.mapping import MappingProfile
-from domain.mapping_session import MappingCheckpoint, MappingSession
+from domain.mapping_session import MappingCheckpoint, MappingSession, RerunRecord
 from domain.orchestration import OrchestrationSnapshot
 from domain.reviews import AssistantMessage, AssistantSessionSnapshot, ReviewSnapshot
 from pipeline.calibration_samples import generate_mapping_context_samples
@@ -106,6 +111,8 @@ _calibration_service = CalibrationService(_calibration_store)
 _orchestration_service = OrchestrationService(_orchestration_store)
 _mapping_session_service = MappingSessionService(_mapping_session_store, _job_store)
 _assistant_service = ReviewAssistantService(_assistant_store, _job_store, _review_store)
+_rerun_store = FileSystemCheckpointRerunStore(settings.jobs_dir)
+_rerun_service = CheckpointRerunService(_rerun_store, _mapping_session_store)
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm"}
 
@@ -169,6 +176,50 @@ def _assistant_message_to_response(message: AssistantMessage) -> AssistantMessag
 def _orchestration_to_response(snapshot: OrchestrationSnapshot) -> OrchestrationSnapshotResponse:
     """Map a persisted orchestration snapshot to an HTTP response model."""
     return OrchestrationSnapshotResponse(**snapshot.model_dump())
+
+
+def _rerun_to_response(record: RerunRecord) -> RerunResponse:
+    """Map a persisted rerun record to an HTTP response model."""
+    return RerunResponse(
+        rerun_id=record.rerun_id,
+        version=record.version,
+        job_id=record.job_id,
+        session_id=record.session_id,
+        source_checkpoint_id=record.source_checkpoint_id,
+        status=record.status,
+        mapping_profile=record.mapping_profile.model_dump(),
+        artifact_manifest=(
+            record.artifact_manifest.model_dump()
+            if record.artifact_manifest
+            else None
+        ),
+        summary=record.summary,
+        error=record.error,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        completed_at=record.completed_at,
+        metadata=record.metadata,
+    )
+
+
+def _build_mapping_session_detail(
+    job_id: str, session_id: str
+) -> MappingSessionDetailResponse:
+    """Build the full session detail response including checkpoints and reruns."""
+    session = _mapping_session_store.get_session(job_id, session_id)
+    checkpoints = [
+        _mapping_checkpoint_to_response(c)
+        for c in _mapping_session_store.list_checkpoints(job_id, session_id)
+    ]
+    reruns = [
+        _rerun_to_response(r)
+        for r in _rerun_store.list_reruns(job_id, session_id)
+    ]
+    return MappingSessionDetailResponse(
+        session=_mapping_session_to_response(session),
+        checkpoints=checkpoints,
+        reruns=reruns,
+    )
 
 
 def _mapping_session_to_response(snapshot: MappingSession) -> MappingSessionResponse:
@@ -1285,12 +1336,7 @@ def create_mapping_session(
         raise HTTPException(status_code=400, detail="Mapping sessions require a completed job")
 
     session, baseline_checkpoint = _mapping_session_service.create_session(job_id, title=body.title)
-    return MappingSessionDetailResponse(
-        session=_mapping_session_to_response(
-            _mapping_session_store.get_session(job_id, session.session_id)
-        ),
-        checkpoints=[_mapping_checkpoint_to_response(baseline_checkpoint)],
-    )
+    return _build_mapping_session_detail(job_id, session.session_id)
 
 
 @router.get(
@@ -1310,20 +1356,13 @@ def get_mapping_session(
     if not _can_access_job(identity, snapshot):
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     try:
-        session = _mapping_session_store.get_session(job_id, session_id)
+        _mapping_session_store.get_session(job_id, session_id)
     except FileNotFoundError:
         raise HTTPException(
             status_code=404, detail=f"Mapping session {session_id} not found"
         ) from None
 
-    checkpoints = [
-        _mapping_checkpoint_to_response(c)
-        for c in _mapping_session_store.list_checkpoints(job_id, session_id)
-    ]
-    return MappingSessionDetailResponse(
-        session=_mapping_session_to_response(session),
-        checkpoints=checkpoints,
-    )
+    return _build_mapping_session_detail(job_id, session_id)
 
 
 @router.post(
@@ -1344,6 +1383,10 @@ def create_mapping_checkpoint(
     if not _can_access_job(identity, snapshot):
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
+    blocked = _mapping_session_service.active_rerun_blocked(job_id, session_id)
+    if blocked is not None:
+        raise HTTPException(status_code=409, detail=blocked)
+
     try:
         mapping_profile = MappingProfile(**body.mapping_profile)
         _mapping_session_service.add_checkpoint(
@@ -1361,15 +1404,7 @@ def create_mapping_checkpoint(
     except (ValueError, ValidationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    session = _mapping_session_store.get_session(job_id, session_id)
-    checkpoints = [
-        _mapping_checkpoint_to_response(c)
-        for c in _mapping_session_store.list_checkpoints(job_id, session_id)
-    ]
-    return MappingSessionDetailResponse(
-        session=_mapping_session_to_response(session),
-        checkpoints=checkpoints,
-    )
+    return _build_mapping_session_detail(job_id, session_id)
 
 
 @router.post(
@@ -1390,9 +1425,13 @@ def restore_mapping_checkpoint(
     if not _can_access_job(identity, snapshot):
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
+    blocked = _mapping_session_service.active_rerun_blocked(job_id, session_id)
+    if blocked is not None:
+        raise HTTPException(status_code=409, detail=blocked)
+
     try:
         _mapping_session_store.get_checkpoint(job_id, session_id, body.checkpoint_id)
-        session = _mapping_session_service.restore_checkpoint(
+        _mapping_session_service.restore_checkpoint(
             job_id, session_id, body.checkpoint_id
         )
     except FileNotFoundError:
@@ -1400,14 +1439,131 @@ def restore_mapping_checkpoint(
             status_code=404, detail="Mapping session or checkpoint not found"
         ) from None
 
-    checkpoints = [
-        _mapping_checkpoint_to_response(c)
-        for c in _mapping_session_store.list_checkpoints(job_id, session_id)
-    ]
-    return MappingSessionDetailResponse(
-        session=_mapping_session_to_response(session),
-        checkpoints=checkpoints,
+    return _build_mapping_session_detail(job_id, session_id)
+
+
+# --------------------------------------------------------------------------- #
+# Rerun routes
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/jobs/{job_id}/mapping-sessions/{session_id}/reruns",
+    response_model=RerunResponse,
+)
+async def trigger_rerun(
+    job_id: str,
+    session_id: str,
+    body: RerunTriggerRequest,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Trigger a versioned pipeline rerun from a restored checkpoint.
+
+    Accepts an explicit *checkpoint_id*, or defaults to the session's
+    ``current_checkpoint_id``. Returns the created rerun record.
+    """
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    try:
+        session = _mapping_session_store.get_session(job_id, session_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Mapping session {session_id} not found"
+        ) from None
+
+    blocked = _mapping_session_service.active_rerun_blocked(job_id, session_id)
+    if blocked is not None:
+        raise HTTPException(status_code=409, detail=blocked)
+
+    checkpoint_id = body.checkpoint_id or session.current_checkpoint_id
+    if checkpoint_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No checkpoint_id provided and session has no current_checkpoint_id",
+        )
+
+    try:
+        _mapping_session_store.get_checkpoint(job_id, session_id, checkpoint_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Checkpoint {checkpoint_id} not found"
+        ) from None
+
+    rerun_id = _rerun_service.trigger_rerun(
+        session,
+        checkpoint_id,
+        metadata=body.metadata,
     )
+    rerun = _rerun_store.get_rerun(job_id, session_id, rerun_id)
+    return _rerun_to_response(rerun)
+
+
+@router.get(
+    "/jobs/{job_id}/mapping-sessions/{session_id}/reruns",
+    response_model=RerunListResponse,
+)
+def list_reruns(
+    job_id: str,
+    session_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """List all versioned pipeline reruns for a mapping session, newest first."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    try:
+        _mapping_session_store.get_session(job_id, session_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Mapping session {session_id} not found"
+        ) from None
+
+    reruns = [_rerun_to_response(r) for r in _rerun_store.list_reruns(job_id, session_id)]
+    return RerunListResponse(reruns=reruns)
+
+
+@router.get(
+    "/jobs/{job_id}/mapping-sessions/{session_id}/reruns/{rerun_id}",
+    response_model=RerunResponse,
+)
+def get_rerun(
+    job_id: str,
+    session_id: str,
+    rerun_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Return one versioned pipeline rerun record."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    try:
+        _mapping_session_store.get_session(job_id, session_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Mapping session {session_id} not found"
+        ) from None
+
+    try:
+        rerun = _rerun_store.get_rerun(job_id, session_id, rerun_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Rerun {rerun_id} not found"
+        ) from None
+
+    return _rerun_to_response(rerun)
 
 
 @router.get("/jobs/{job_id}/assistant/sessions", response_model=AssistantSessionListResponse)

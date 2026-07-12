@@ -227,6 +227,35 @@ class MappingSessionStatus(str, enum.Enum):
         return self in (MappingSessionStatus.ARCHIVED, MappingSessionStatus.FAILED)
 
 
+class RerunStatus(str, enum.Enum):
+    """Lifecycle state for a checkpoint-triggered versioned pipeline rerun.
+
+    A rerun is a re-execution of the full pipeline (pose→retarget→evaluate→
+    package) using a restored mapping checkpoint. Each rerun is versioned and
+    stored under the mapping session tree without mutating the baseline job.
+
+    Canonical transitions:
+        PENDING → QUEUED → RUNNING → COMPLETED
+        PENDING → QUEUED → RUNNING → FAILED
+        Any non-terminal → CANCELLED
+    """
+
+    PENDING = "pending"
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+    def is_terminal(self) -> bool:
+        """Return True if the rerun no longer produces new events."""
+        return self in (RerunStatus.COMPLETED, RerunStatus.FAILED, RerunStatus.CANCELLED)
+
+    def is_active(self) -> bool:
+        """Return True if the rerun is occupying a queue/worker slot."""
+        return self in (RerunStatus.QUEUED, RerunStatus.RUNNING)
+
+
 class CheckpointAuthor(str, enum.Enum):
     """Author label for mapping checkpoints."""
 
