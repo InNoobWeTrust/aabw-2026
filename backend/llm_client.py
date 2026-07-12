@@ -43,7 +43,7 @@ async def request_chat_json(
         structured_output=True,
     )
     try:
-        return json.loads(content)
+        return _parse_json_object_content(content)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"llm_provider_invalid_json: {exc}") from exc
 
@@ -183,6 +183,53 @@ def _extract_structured_output_content(response: Any) -> str:
             return arguments.strip()
 
     return _extract_message_content(response)
+
+
+def _parse_json_object_content(content: str) -> dict[str, Any]:
+    """Parse provider JSON content, tolerating trailing text or duplicated blobs.
+
+    Some OpenAI-compatible providers return a valid JSON object followed by
+    extra plain text or another serialized blob. ``json.loads`` rejects that as
+    ``Extra data`` even though the leading object is usable. This helper keeps
+    strict failure semantics for non-JSON content while salvaging the first
+    top-level JSON object when one is present.
+    """
+    stripped = content.strip()
+    decoder = json.JSONDecoder()
+
+    direct_value = _raw_decode_json_from_index(decoder, stripped, 0)
+    if isinstance(direct_value, dict):
+        return direct_value
+    if direct_value is not None:
+        raise json.JSONDecodeError("Expected JSON object", stripped, 0)
+
+    for start_char in ("{", "["):
+        start_index = stripped.find(start_char)
+        if start_index == -1:
+            continue
+        parsed = _raw_decode_json_from_index(decoder, stripped, start_index)
+        if isinstance(parsed, dict):
+            return parsed
+        if parsed is not None:
+            raise json.JSONDecodeError("Expected JSON object", stripped, start_index)
+
+    return json.loads(stripped)
+
+
+def _raw_decode_json_from_index(
+    decoder: json.JSONDecoder,
+    content: str,
+    start_index: int,
+) -> Any | None:
+    """Attempt one raw JSON decode starting at ``start_index``.
+
+    Returns None when decoding fails at that offset.
+    """
+    try:
+        value, _end_index = decoder.raw_decode(content, idx=start_index)
+    except json.JSONDecodeError:
+        return None
+    return value
 
 
 def _extract_message_content(response: Any) -> str:

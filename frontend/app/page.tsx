@@ -7,6 +7,7 @@ import VideoInspector from "../components/VideoInspector";
 import TrajectoryChart from "../components/TrajectoryChart";
 import ReviewPanel from "../components/ReviewPanel";
 import AssistantChat from "../components/AssistantChat";
+import OrchestratorPanel from "../components/OrchestratorPanel";
 
 const DEMO_TOKEN = "demo-local";
 const POLL_INTERVAL_MS = 2000;
@@ -38,7 +39,7 @@ export default function Home() {
     retarget: null,
   });
 
-  const [modalRightTab, setModalRightTab] = useState<"reports" | "chat">("reports");
+  const [modalRightTab, setModalRightTab] = useState<"reports" | "chat" | "orchestration">("reports");
 
   const pollTimers = useRef<{ [key: string]: NodeJS.Timeout }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -516,6 +517,16 @@ export default function Home() {
                 >
                   <MessageSquare className="h-3.5 w-3.5" /> Interactive AI Agent
                 </button>
+                <button
+                  onClick={() => setModalRightTab("orchestration")}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    modalRightTab === "orchestration"
+                      ? "bg-slate-900 text-accent shadow-sm"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <Sparkles className="h-3.5 w-3.5" /> Adaptive Orchestrator
+                </button>
               </div>
 
               {modalRightTab === "reports" ? (
@@ -578,8 +589,10 @@ export default function Home() {
                     onVerdictChange={handleVerdictChange}
                   />
                 </>
-              ) : (
+              ) : modalRightTab === "chat" ? (
                 <AssistantChat jobId={activeJob.job_id} token={token} />
+              ) : (
+                <OrchestratorPanel jobId={activeJob.job_id} token={token} />
               )}
             </div>
           </div>

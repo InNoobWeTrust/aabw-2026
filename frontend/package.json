@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "gen:openapi": "cd .. && uv run python -m backend.export_openapi frontend/generated/openapi.json",
+    "gen:api-types": "npm run gen:openapi && npx openapi-typescript generated/openapi.json -o generated/api.generated.ts"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",
@@ -20,6 +22,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
+    "openapi-typescript": "^7.10.1",
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
     "typescript": "^5"

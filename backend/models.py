@@ -14,12 +14,17 @@ from domain.enums import (
     CalibrationDecision,
     CalibrationStatus,
     CalibrationVerdict,
+    CheckpointAuthor,
     JobStatus,
+    MappingSessionStatus,
+    OrchestrationDecision,
+    OrchestrationStatus,
     PipelineStage,
     ReviewStage,
     ReviewStatus,
     ReviewVerdict,
 )
+from domain.orchestration import CaptureGuidancePayload
 
 
 class LoginRequest(BaseModel):
@@ -184,3 +189,83 @@ class AssistantSessionListResponse(BaseModel):
     """Wrapper for listing reviewer-assistant sessions attached to a job."""
 
     sessions: list[AssistantSessionResponse]
+
+
+class OrchestrationSnapshotResponse(BaseModel):
+    """Public-facing orchestration snapshot returned to the client."""
+
+    job_id: str
+    status: OrchestrationStatus
+    provider: str
+    sandbox: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    decision: OrchestrationDecision | None = None
+    summary: str | None = None
+    json_path: str | None = None
+    error: str | None = None
+    capture_guidance: CaptureGuidancePayload | None = None
+    tuned_mapping_profile: dict | None = None
+    evidence_manifest: dict = Field(default_factory=dict)
+    metadata: dict = Field(default_factory=dict)
+
+
+class MappingSessionCreateRequest(BaseModel):
+    """Create a mapping refinement session for a completed job."""
+
+    title: str | None = None
+
+
+class MappingCheckpointCreateRequest(BaseModel):
+    """Submit a new mapping checkpoint into a session."""
+
+    mapping_profile: dict
+    author: CheckpointAuthor
+    summary: str | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class MappingCheckpointRestoreRequest(BaseModel):
+    """Restore one existing checkpoint as the current mapping revision."""
+
+    checkpoint_id: str
+
+
+class MappingSessionResponse(BaseModel):
+    """Public-facing mapping session snapshot."""
+
+    job_id: str
+    session_id: str
+    status: MappingSessionStatus
+    current_checkpoint_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    title: str | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class MappingCheckpointResponse(BaseModel):
+    """Public-facing mapping checkpoint."""
+
+    checkpoint_id: str
+    session_id: str
+    job_id: str
+    author: CheckpointAuthor
+    mapping_profile: dict
+    summary: str | None = None
+    parent_checkpoint_id: str | None = None
+    created_at: datetime
+    metadata: dict = Field(default_factory=dict)
+
+
+class MappingSessionDetailResponse(BaseModel):
+    """Mapping session plus its checkpoint history."""
+
+    session: MappingSessionResponse
+    checkpoints: list[MappingCheckpointResponse]
+
+
+class MappingSessionListResponse(BaseModel):
+    """Wrapper for listing mapping sessions attached to a job."""
+
+    sessions: list[MappingSessionResponse]

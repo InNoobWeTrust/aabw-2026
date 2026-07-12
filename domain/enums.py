@@ -186,3 +186,51 @@ class AssistantMessageRole(str, enum.Enum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
+
+
+class OrchestrationDecision(str, enum.Enum):
+    """Decision emitted after adaptive pipeline orchestration evaluation."""
+
+    BASELINE_OK = "baseline_ok"
+    RERUN_WITH_PROFILE = "rerun_with_profile"
+    SKELETON_ONLY = "skeleton_only"
+    RETRY_CAPTURE = "retry_capture"
+
+
+class OrchestrationStatus(str, enum.Enum):
+    """Lifecycle state for an orchestration evaluation run."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+    def is_terminal(self) -> bool:
+        """Return True if the orchestration run no longer produces new events."""
+        return self in (
+            OrchestrationStatus.COMPLETED,
+            OrchestrationStatus.FAILED,
+            OrchestrationStatus.CANCELLED,
+        )
+
+
+class MappingSessionStatus(str, enum.Enum):
+    """Lifecycle state for a checkpointed mapping refinement session."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    FAILED = "failed"
+
+    def is_terminal(self) -> bool:
+        """Return True if the mapping session no longer accepts changes."""
+        return self in (MappingSessionStatus.ARCHIVED, MappingSessionStatus.FAILED)
+
+
+class CheckpointAuthor(str, enum.Enum):
+    """Author label for mapping checkpoints."""
+
+    BASELINE = "baseline"
+    ORCHESTRATOR = "orchestrator"
+    ASSISTANT = "assistant"
+    MANUAL = "manual"

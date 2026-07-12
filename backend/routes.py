@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import ValidationError
 
 from backend.assistant_service import ReviewAssistantService
 from backend.assistant_store import FileSystemAssistantStore
@@ -26,6 +27,8 @@ from backend.calibration_service import CalibrationService, build_mapping_calibr
 from backend.calibration_store import FileSystemCalibrationStore
 from backend.config import settings
 from backend.job_store import FileSystemJobStore
+from backend.mapping_session_service import MappingSessionService
+from backend.mapping_session_store import FileSystemMappingSessionStore
 from backend.models import (
     ArtifactManifestResponse,
     AssistantMessageCreateRequest,
@@ -38,12 +41,26 @@ from backend.models import (
     JobListResponse,
     JobResponse,
     LoginRequest,
+    MappingCheckpointCreateRequest,
+    MappingCheckpointResponse,
+    MappingCheckpointRestoreRequest,
+    MappingSessionCreateRequest,
+    MappingSessionDetailResponse,
+    MappingSessionListResponse,
+    MappingSessionResponse,
+    OrchestrationSnapshotResponse,
     ReviewListResponse,
     ReviewSnapshotResponse,
     SessionSummary,
     SessionSummaryListResponse,
     TokenResponse,
 )
+from backend.orchestration_service import (
+    OrchestrationService,
+    build_evidence_manifest,
+    build_orchestration_factory,
+)
+from backend.orchestration_store import FileSystemOrchestrationStore
 from backend.queue_manager import InProcessQueueManager
 from backend.review_service import (
     ReviewService,
@@ -56,6 +73,8 @@ from domain.calibration import CalibrationSnapshot
 from domain.enums import AssistantSessionStatus, JobStatus, PipelineStage, ReviewStage
 from domain.jobs import JobEvent, JobOwner, JobSnapshot
 from domain.mapping import MappingProfile
+from domain.mapping_session import MappingCheckpoint, MappingSession
+from domain.orchestration import OrchestrationSnapshot
 from domain.reviews import AssistantMessage, AssistantSessionSnapshot, ReviewSnapshot
 from pipeline.calibration_samples import generate_mapping_context_samples
 from pipeline.evaluate import evaluate_trajectory
@@ -79,9 +98,13 @@ _logger = logging.getLogger(__name__)
 _job_store = FileSystemJobStore(settings.jobs_dir)
 _review_store = FileSystemReviewStore(settings.jobs_dir)
 _calibration_store = FileSystemCalibrationStore(settings.jobs_dir)
+_orchestration_store = FileSystemOrchestrationStore(settings.jobs_dir)
+_mapping_session_store = FileSystemMappingSessionStore(settings.jobs_dir)
 _assistant_store = FileSystemAssistantStore(settings.jobs_dir)
 _review_service = ReviewService(_review_store)
 _calibration_service = CalibrationService(_calibration_store)
+_orchestration_service = OrchestrationService(_orchestration_store)
+_mapping_session_service = MappingSessionService(_mapping_session_store, _job_store)
 _assistant_service = ReviewAssistantService(_assistant_store, _job_store, _review_store)
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm"}
@@ -143,6 +166,23 @@ def _assistant_message_to_response(message: AssistantMessage) -> AssistantMessag
     return AssistantMessageResponse(**message.model_dump())
 
 
+def _orchestration_to_response(snapshot: OrchestrationSnapshot) -> OrchestrationSnapshotResponse:
+    """Map a persisted orchestration snapshot to an HTTP response model."""
+    return OrchestrationSnapshotResponse(**snapshot.model_dump())
+
+
+def _mapping_session_to_response(snapshot: MappingSession) -> MappingSessionResponse:
+    """Map a persisted mapping session snapshot to an HTTP response model."""
+    return MappingSessionResponse(**snapshot.model_dump())
+
+
+def _mapping_checkpoint_to_response(checkpoint: MappingCheckpoint) -> MappingCheckpointResponse:
+    """Map a persisted mapping checkpoint to an HTTP response model."""
+    payload = checkpoint.model_dump()
+    payload["mapping_profile"] = checkpoint.mapping_profile.model_dump()
+    return MappingCheckpointResponse(**payload)
+
+
 def _artifact_manifest(job_id: str, snapshot: JobSnapshot) -> dict:
     """Return a stage-aware artifact manifest for a job."""
     output_dir = Path(snapshot.output_dir)
@@ -167,6 +207,10 @@ def _artifact_manifest(job_id: str, snapshot: JobSnapshot) -> dict:
         "retarget_review_md_url": f"/api/jobs/{job_id}/downloads/retarget_review_md",
         "mapping_calibration_url": f"/api/jobs/{job_id}/mapping-calibration",
         "mapping_calibration_stream_url": f"/api/jobs/{job_id}/mapping-calibration/stream",
+        "orchestration_url": f"/api/jobs/{job_id}/orchestration",
+        "orchestration_run_url": f"/api/jobs/{job_id}/orchestration/run",
+        "orchestration_stream_url": f"/api/jobs/{job_id}/orchestration/stream",
+        "mapping_sessions_url": f"/api/jobs/{job_id}/mapping-sessions",
         "assistant_sessions_url": f"/api/jobs/{job_id}/assistant/sessions",
     }
 
@@ -387,6 +431,23 @@ def _review_summary_or_none(job_id: str, stage: ReviewStage) -> dict | None:
     }
 
 
+def _calibration_summary_or_none(job_id: str) -> dict | None:
+    """Return a small persisted calibration summary when it exists."""
+    if not _calibration_store.calibration_exists(job_id):
+        return None
+    try:
+        calibration = _calibration_store.get_calibration(job_id)
+    except Exception:
+        return None
+    return {
+        "status": calibration.status.value,
+        "decision": calibration.decision.value if calibration.decision else None,
+        "verdict": calibration.verdict.value if calibration.verdict else None,
+        "summary": calibration.summary,
+        "json_path": calibration.json_path,
+    }
+
+
 def _build_mapping_calibration_context(job_id: str, snapshot: JobSnapshot) -> dict:
     """Build a bounded mapping-calibration context from persisted job results."""
     result = snapshot.result or {}
@@ -417,6 +478,16 @@ def _build_mapping_calibration_context(job_id: str, snapshot: JobSnapshot) -> di
         "pose_review_summary": _review_summary_or_none(job_id, ReviewStage.POSE),
         "retarget_review_summary": _review_summary_or_none(job_id, ReviewStage.RETARGET),
     }
+
+
+def _build_orchestration_context(job_id: str, snapshot: JobSnapshot) -> dict:
+    """Build compact cross-stage evidence for the adaptive orchestrator."""
+    return build_evidence_manifest(
+        snapshot.result,
+        _review_summary_or_none(job_id, ReviewStage.POSE),
+        _review_summary_or_none(job_id, ReviewStage.RETARGET),
+        _calibration_summary_or_none(job_id),
+    )
 
 
 def _schedule_mapping_calibration(job_id: str) -> None:
@@ -1044,7 +1115,7 @@ def get_mapping_calibration(
 
 
 @router.post("/jobs/{job_id}/mapping-calibration/run", response_model=CalibrationSnapshotResponse)
-def run_mapping_calibration(
+async def run_mapping_calibration(
     job_id: str,
     identity: SessionIdentity = Depends(require_authenticated_identity),
 ):
@@ -1102,6 +1173,243 @@ async def stream_mapping_calibration(
     return StreamingResponse(_event_stream(), media_type="text/event-stream")
 
 
+@router.get("/jobs/{job_id}/orchestration", response_model=OrchestrationSnapshotResponse)
+def get_orchestration(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Return the persisted adaptive orchestration snapshot for one job."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if not _orchestration_store.orchestration_exists(job_id):
+        raise HTTPException(status_code=404, detail="Orchestration not found")
+    return _orchestration_to_response(_orchestration_store.get_orchestration(job_id))
+
+
+@router.post("/jobs/{job_id}/orchestration/run", response_model=OrchestrationSnapshotResponse)
+async def run_orchestration(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Schedule an adaptive orchestration run for a completed job."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if snapshot.status != JobStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Orchestration requires a completed job")
+
+    evidence_manifest = _build_orchestration_context(job_id, snapshot)
+    _orchestration_service.schedule_orchestration(
+        job_id=job_id,
+        evidence_manifest=evidence_manifest,
+        orchestration_factory=build_orchestration_factory(evidence_manifest),
+    )
+    return _orchestration_to_response(_orchestration_store.get_orchestration(job_id))
+
+
+@router.get("/jobs/{job_id}/orchestration/stream")
+async def stream_orchestration(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity_optional_query),
+):
+    """Stream adaptive orchestration events over SSE with persisted replay."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if not _orchestration_store.orchestration_exists(job_id):
+        raise HTTPException(status_code=404, detail="Orchestration not found")
+
+    async def _event_stream():
+        import asyncio as _asyncio
+        import json as _json
+
+        sent = 0
+        while True:
+            events = _orchestration_store.list_events(job_id)
+            while sent < len(events):
+                event = events[sent]
+                payload = _json.dumps(event.payload, ensure_ascii=False)
+                yield f"event: {event.event}\ndata: {payload}\n\n"
+                sent += 1
+            orchestration = _orchestration_store.get_orchestration(job_id)
+            if orchestration.status.is_terminal():
+                break
+            await _asyncio.sleep(0.25)
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
+@router.get("/jobs/{job_id}/mapping-sessions", response_model=MappingSessionListResponse)
+def list_mapping_sessions(
+    job_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """List mapping refinement sessions for one completed job."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    sessions = [
+        _mapping_session_to_response(s) for s in _mapping_session_store.list_sessions(job_id)
+    ]
+    return MappingSessionListResponse(sessions=sessions)
+
+
+@router.post("/jobs/{job_id}/mapping-sessions", response_model=MappingSessionDetailResponse)
+def create_mapping_session(
+    job_id: str,
+    body: MappingSessionCreateRequest,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Create a checkpointed mapping session seeded from the current job mapping profile."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if snapshot.status != JobStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Mapping sessions require a completed job")
+
+    session, baseline_checkpoint = _mapping_session_service.create_session(job_id, title=body.title)
+    return MappingSessionDetailResponse(
+        session=_mapping_session_to_response(
+            _mapping_session_store.get_session(job_id, session.session_id)
+        ),
+        checkpoints=[_mapping_checkpoint_to_response(baseline_checkpoint)],
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/mapping-sessions/{session_id}",
+    response_model=MappingSessionDetailResponse,
+)
+def get_mapping_session(
+    job_id: str,
+    session_id: str,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Return one mapping session and its checkpoint history."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    try:
+        session = _mapping_session_store.get_session(job_id, session_id)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Mapping session {session_id} not found"
+        ) from None
+
+    checkpoints = [
+        _mapping_checkpoint_to_response(c)
+        for c in _mapping_session_store.list_checkpoints(job_id, session_id)
+    ]
+    return MappingSessionDetailResponse(
+        session=_mapping_session_to_response(session),
+        checkpoints=checkpoints,
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/mapping-sessions/{session_id}/checkpoints",
+    response_model=MappingSessionDetailResponse,
+)
+def create_mapping_checkpoint(
+    job_id: str,
+    session_id: str,
+    body: MappingCheckpointCreateRequest,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Append one immutable mapping checkpoint to an active session."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    try:
+        mapping_profile = MappingProfile(**body.mapping_profile)
+        _mapping_session_service.add_checkpoint(
+            job_id,
+            session_id,
+            author=body.author,
+            mapping_profile=mapping_profile,
+            summary=body.summary,
+            metadata=body.metadata,
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"Mapping session {session_id} not found"
+        ) from None
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    session = _mapping_session_store.get_session(job_id, session_id)
+    checkpoints = [
+        _mapping_checkpoint_to_response(c)
+        for c in _mapping_session_store.list_checkpoints(job_id, session_id)
+    ]
+    return MappingSessionDetailResponse(
+        session=_mapping_session_to_response(session),
+        checkpoints=checkpoints,
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/mapping-sessions/{session_id}/restore",
+    response_model=MappingSessionDetailResponse,
+)
+def restore_mapping_checkpoint(
+    job_id: str,
+    session_id: str,
+    body: MappingCheckpointRestoreRequest,
+    identity: SessionIdentity = Depends(require_authenticated_identity),
+):
+    """Restore one checkpoint as the current mapping revision for the session."""
+    try:
+        snapshot = _job_store.get_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found") from None
+    if not _can_access_job(identity, snapshot):
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    try:
+        _mapping_session_store.get_checkpoint(job_id, session_id, body.checkpoint_id)
+        session = _mapping_session_service.restore_checkpoint(
+            job_id, session_id, body.checkpoint_id
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404, detail="Mapping session or checkpoint not found"
+        ) from None
+
+    checkpoints = [
+        _mapping_checkpoint_to_response(c)
+        for c in _mapping_session_store.list_checkpoints(job_id, session_id)
+    ]
+    return MappingSessionDetailResponse(
+        session=_mapping_session_to_response(session),
+        checkpoints=checkpoints,
+    )
+
+
 @router.get("/jobs/{job_id}/assistant/sessions", response_model=AssistantSessionListResponse)
 def list_assistant_sessions(
     job_id: str,
@@ -1120,7 +1428,7 @@ def list_assistant_sessions(
 
 
 @router.post("/jobs/{job_id}/assistant/sessions", response_model=AssistantSessionDetailResponse)
-def create_assistant_session(
+async def create_assistant_session(
     job_id: str,
     body: AssistantSessionCreateRequest,
     identity: SessionIdentity = Depends(require_authenticated_identity),
@@ -1185,7 +1493,7 @@ def get_assistant_session(
     "/jobs/{job_id}/assistant/sessions/{session_id}/messages",
     response_model=AssistantSessionDetailResponse,
 )
-def post_assistant_message(
+async def post_assistant_message(
     job_id: str,
     session_id: str,
     body: AssistantMessageCreateRequest,

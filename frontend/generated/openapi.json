@@ -1,0 +1,2993 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RoboData",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "description": "Unauthenticated health check for load balancers and orchestrators.",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "summary": "Login",
+        "description": "Verify the password and return a JWT access token with role and session identity.",
+        "operationId": "login_api_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/verify": {
+      "get": {
+        "summary": "Verify",
+        "description": "Return token validity, role, session identity, and expiration timestamp.",
+        "operationId": "verify_api_auth_verify_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/jobs/upload": {
+      "post": {
+        "summary": "Upload Video",
+        "description": "Accept an uploaded video, validate it, create a job, and enqueue the pipeline.",
+        "operationId": "upload_video_api_jobs_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_video_api_jobs_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "summary": "List Jobs",
+        "description": "Return the caller-visible jobs list.",
+        "operationId": "list_jobs_api_jobs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "get": {
+        "summary": "Get Job",
+        "description": "Return the status of a single job.\n\nJudges may only access their own jobs. Admins may access any job.\nReturns 404 (not 403) for inaccessible jobs to avoid existence leaks.",
+        "operationId": "get_job_api_jobs__job_id__get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Job",
+        "description": "Remove a job from the store and delete all its data from disk.\n\nJudges may only delete their own jobs. Admins may delete any job.\nReturns 404 for inaccessible or nonexistent jobs.",
+        "operationId": "delete_job_api_jobs__job_id__delete",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/video/original": {
+      "get": {
+        "summary": "Get Original Video",
+        "description": "Stream/serve the original uploaded video file.",
+        "operationId": "get_original_video_api_jobs__job_id__video_original_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/video/simulation": {
+      "get": {
+        "summary": "Get Simulation Video",
+        "description": "Stream/serve the rendered simulation video file.",
+        "operationId": "get_simulation_video_api_jobs__job_id__video_simulation_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/artifacts": {
+      "get": {
+        "summary": "Get Artifacts",
+        "description": "Return a manifest of available artifacts and convenience URLs for one job.",
+        "operationId": "get_artifacts_api_jobs__job_id__artifacts_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactManifestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/reviews": {
+      "get": {
+        "summary": "List Reviews",
+        "description": "Return both stage review snapshots that currently exist for a job.",
+        "operationId": "list_reviews_api_jobs__job_id__reviews_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/reviews/{stage}": {
+      "get": {
+        "summary": "Get Review",
+        "description": "Return the persisted snapshot for one review stage.",
+        "operationId": "get_review_api_jobs__job_id__reviews__stage__get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "stage",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Stage"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewSnapshotResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/reviews/{stage}/stream": {
+      "get": {
+        "summary": "Stream Review",
+        "description": "Stream one review stage over Server-Sent Events with persisted replay.",
+        "operationId": "stream_review_api_jobs__job_id__reviews__stage__stream_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "stage",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Stage"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/mapping-calibration": {
+      "get": {
+        "summary": "Get Mapping Calibration",
+        "description": "Return the persisted read-only mapping calibration snapshot for one job.",
+        "operationId": "get_mapping_calibration_api_jobs__job_id__mapping_calibration_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationSnapshotResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/mapping-calibration/run": {
+      "post": {
+        "summary": "Run Mapping Calibration",
+        "description": "Schedule a read-only mapping calibration run and return its current snapshot.",
+        "operationId": "run_mapping_calibration_api_jobs__job_id__mapping_calibration_run_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationSnapshotResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/mapping-calibration/stream": {
+      "get": {
+        "summary": "Stream Mapping Calibration",
+        "description": "Stream mapping calibration events over Server-Sent Events with persisted replay.",
+        "operationId": "stream_mapping_calibration_api_jobs__job_id__mapping_calibration_stream_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/orchestration": {
+      "get": {
+        "summary": "Get Orchestration",
+        "description": "Return the persisted adaptive orchestration snapshot for one job.",
+        "operationId": "get_orchestration_api_jobs__job_id__orchestration_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrchestrationSnapshotResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/orchestration/run": {
+      "post": {
+        "summary": "Run Orchestration",
+        "description": "Schedule an adaptive orchestration run for a completed job.",
+        "operationId": "run_orchestration_api_jobs__job_id__orchestration_run_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrchestrationSnapshotResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/orchestration/stream": {
+      "get": {
+        "summary": "Stream Orchestration",
+        "description": "Stream adaptive orchestration events over SSE with persisted replay.",
+        "operationId": "stream_orchestration_api_jobs__job_id__orchestration_stream_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/mapping-sessions": {
+      "get": {
+        "summary": "List Mapping Sessions",
+        "description": "List mapping refinement sessions for one completed job.",
+        "operationId": "list_mapping_sessions_api_jobs__job_id__mapping_sessions_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MappingSessionListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Mapping Session",
+        "description": "Create a checkpointed mapping session seeded from the current job mapping profile.",
+        "operationId": "create_mapping_session_api_jobs__job_id__mapping_sessions_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MappingSessionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MappingSessionDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/mapping-sessions/{session_id}": {
+      "get": {
+        "summary": "Get Mapping Session",
+        "description": "Return one mapping session and its checkpoint history.",
+        "operationId": "get_mapping_session_api_jobs__job_id__mapping_sessions__session_id__get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MappingSessionDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/mapping-sessions/{session_id}/checkpoints": {
+      "post": {
+        "summary": "Create Mapping Checkpoint",
+        "description": "Append one immutable mapping checkpoint to an active session.",
+        "operationId": "create_mapping_checkpoint_api_jobs__job_id__mapping_sessions__session_id__checkpoints_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MappingCheckpointCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MappingSessionDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/mapping-sessions/{session_id}/restore": {
+      "post": {
+        "summary": "Restore Mapping Checkpoint",
+        "description": "Restore one checkpoint as the current mapping revision for the session.",
+        "operationId": "restore_mapping_checkpoint_api_jobs__job_id__mapping_sessions__session_id__restore_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MappingCheckpointRestoreRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MappingSessionDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/assistant/sessions": {
+      "get": {
+        "summary": "List Assistant Sessions",
+        "description": "List persisted reviewer-assistant sessions for one job.",
+        "operationId": "list_assistant_sessions_api_jobs__job_id__assistant_sessions_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSessionListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Assistant Session",
+        "description": "Create a reviewer-assistant session and optionally seed the first user message.",
+        "operationId": "create_assistant_session_api_jobs__job_id__assistant_sessions_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantSessionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSessionDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/assistant/sessions/{session_id}": {
+      "get": {
+        "summary": "Get Assistant Session",
+        "description": "Return one assistant session plus its transcript.",
+        "operationId": "get_assistant_session_api_jobs__job_id__assistant_sessions__session_id__get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSessionDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/assistant/sessions/{session_id}/messages": {
+      "post": {
+        "summary": "Post Assistant Message",
+        "description": "Append a user message and trigger one bounded assistant loop.",
+        "operationId": "post_assistant_message_api_jobs__job_id__assistant_sessions__session_id__messages_post",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantMessageCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantSessionDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/assistant/sessions/{session_id}/stream": {
+      "get": {
+        "summary": "Stream Assistant Session",
+        "description": "Stream reviewer-assistant events for one session over SSE.",
+        "operationId": "stream_assistant_session_api_jobs__job_id__assistant_sessions__session_id__stream_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/download": {
+      "get": {
+        "summary": "Download Dataset",
+        "description": "Stream a zip archive of the complete output directory.",
+        "operationId": "download_dataset_api_jobs__job_id__download_get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/downloads/{artifact_key}": {
+      "get": {
+        "summary": "Download Artifact",
+        "description": "Download a specific artifact or zipped dataset branch for a job.",
+        "operationId": "download_artifact_api_jobs__job_id__downloads__artifact_key__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "artifact_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/jobs": {
+      "get": {
+        "summary": "List All Jobs Admin",
+        "description": "Return all jobs in the store (admin only, unfiltered).",
+        "operationId": "list_all_jobs_admin_api_admin_jobs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/admin/sessions": {
+      "get": {
+        "summary": "List Sessions Admin",
+        "description": "Aggregate job counts grouped by judge_session_id (admin only).\n\nSessions without a judge_session_id (e.g. admin-submitted jobs or legacy\njobs with None) are excluded from the summary.",
+        "operationId": "list_sessions_admin_api_admin_sessions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionSummaryListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ArtifactManifestResponse": {
+        "properties": {
+          "artifacts": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Artifacts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "artifacts"
+        ],
+        "title": "ArtifactManifestResponse",
+        "description": "Manifest of generated artifacts for a completed or partially completed job."
+      },
+      "AssistantMessageCreateRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "AssistantMessageCreateRequest",
+        "description": "Submit a user message into an existing reviewer-assistant session."
+      },
+      "AssistantMessageResponse": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "role": {
+            "$ref": "#/components/schemas/AssistantMessageRole"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "at",
+          "job_id",
+          "session_id",
+          "role",
+          "content"
+        ],
+        "title": "AssistantMessageResponse",
+        "description": "Public-facing reviewer-assistant transcript message."
+      },
+      "AssistantMessageRole": {
+        "type": "string",
+        "enum": [
+          "system",
+          "user",
+          "assistant",
+          "tool"
+        ],
+        "title": "AssistantMessageRole",
+        "description": "Role labels persisted in a reviewer-assistant conversation transcript."
+      },
+      "AssistantSessionCreateRequest": {
+        "properties": {
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "title": "AssistantSessionCreateRequest",
+        "description": "Create a reviewer-assistant session, optionally with a seed user message."
+      },
+      "AssistantSessionDetailResponse": {
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/AssistantSessionResponse"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/AssistantMessageResponse"
+            },
+            "type": "array",
+            "title": "Messages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session",
+          "messages"
+        ],
+        "title": "AssistantSessionDetailResponse",
+        "description": "Reviewer-assistant session plus transcript."
+      },
+      "AssistantSessionListResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/AssistantSessionResponse"
+            },
+            "type": "array",
+            "title": "Sessions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessions"
+        ],
+        "title": "AssistantSessionListResponse",
+        "description": "Wrapper for listing reviewer-assistant sessions attached to a job."
+      },
+      "AssistantSessionResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AssistantSessionStatus"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "sandbox": {
+            "type": "string",
+            "title": "Sandbox"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "session_id",
+          "status",
+          "provider",
+          "sandbox",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AssistantSessionResponse",
+        "description": "Public-facing reviewer-assistant session snapshot."
+      },
+      "AssistantSessionStatus": {
+        "type": "string",
+        "enum": [
+          "idle",
+          "running",
+          "failed"
+        ],
+        "title": "AssistantSessionStatus",
+        "description": "Lifecycle state for an interactive reviewer-assistant session."
+      },
+      "Body_upload_video_api_jobs_upload_post": {
+        "properties": {
+          "video": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Video"
+          }
+        },
+        "type": "object",
+        "required": [
+          "video"
+        ],
+        "title": "Body_upload_video_api_jobs_upload_post"
+      },
+      "CalibrationDecision": {
+        "type": "string",
+        "enum": [
+          "baseline_ok",
+          "rerun_with_profile",
+          "skeleton_only",
+          "reject"
+        ],
+        "title": "CalibrationDecision",
+        "description": "Decision label emitted by the mapping calibrator."
+      },
+      "CalibrationSnapshotResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CalibrationStatus"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "sandbox": {
+            "type": "string",
+            "title": "Sandbox"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalibrationDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalibrationVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "json_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Json Path"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "context_manifest": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Context Manifest"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "provider",
+          "sandbox"
+        ],
+        "title": "CalibrationSnapshotResponse",
+        "description": "Public-facing mapping calibration snapshot returned to the client."
+      },
+      "CalibrationStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed"
+        ],
+        "title": "CalibrationStatus",
+        "description": "Lifecycle state for an asynchronous mapping calibration sub-job."
+      },
+      "CalibrationVerdict": {
+        "type": "string",
+        "enum": [
+          "baseline_acceptable",
+          "robot_mapping_salvageable",
+          "skeleton_only",
+          "rejected"
+        ],
+        "title": "CalibrationVerdict",
+        "description": "High-level usability verdict emitted by the mapping calibrator."
+      },
+      "CaptureGuidancePayload": {
+        "description": "Structured capture guidance returned for unsalvageable clips.",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "detection_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Detection Rate"
+          },
+          "missing_landmark_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Missing Landmark Ratio"
+          },
+          "suggestions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          },
+          "risks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risks",
+            "type": "array"
+          }
+        },
+        "title": "CaptureGuidancePayload",
+        "type": "object"
+      },
+      "CheckpointAuthor": {
+        "type": "string",
+        "enum": [
+          "baseline",
+          "orchestrator",
+          "assistant",
+          "manual"
+        ],
+        "title": "CheckpointAuthor",
+        "description": "Author label for mapping checkpoints."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "JobListResponse": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobResponse"
+            },
+            "type": "array",
+            "title": "Jobs"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobs",
+          "total"
+        ],
+        "title": "JobListResponse",
+        "description": "Wrapper for listing multiple jobs."
+      },
+      "JobResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "progress": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Progress",
+            "description": "Pipeline progress 0.0–1.0"
+          },
+          "current_stage": {
+            "$ref": "#/components/schemas/PipelineStage",
+            "default": "ingest"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "filename",
+          "status",
+          "progress",
+          "created_at"
+        ],
+        "title": "JobResponse",
+        "description": "Public-facing job status returned to the client.\n\nUses the canonical JobStatus and PipelineStage from domain.enums. The\ncurrent_stage field reflects the stage the pipeline is currently executing\nor last executed if the job has reached a terminal state."
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "JobStatus",
+        "description": "Coarse-grained lifecycle state of a Job.\n\nA Job has exactly one status at any moment. Status describes *where* the\nJob is in its lifecycle, while PipelineStage describes *what is running*\nduring the RUNNING state. The two are orthogonal concepts.\n\nCanonical transitions:\n    QUEUED → RUNNING → COMPLETED\n    QUEUED → RUNNING → FAILED\n    QUEUED → CANCELLED\n    RUNNING → CANCELLED (best-effort signal checked between stages)"
+      },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "title": "LoginRequest",
+        "description": "Request body for password-based login."
+      },
+      "MappingCheckpointCreateRequest": {
+        "properties": {
+          "mapping_profile": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Mapping Profile"
+          },
+          "author": {
+            "$ref": "#/components/schemas/CheckpointAuthor"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mapping_profile",
+          "author"
+        ],
+        "title": "MappingCheckpointCreateRequest",
+        "description": "Submit a new mapping checkpoint into a session."
+      },
+      "MappingCheckpointResponse": {
+        "properties": {
+          "checkpoint_id": {
+            "type": "string",
+            "title": "Checkpoint Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "author": {
+            "$ref": "#/components/schemas/CheckpointAuthor"
+          },
+          "mapping_profile": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Mapping Profile"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "parent_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Checkpoint Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "checkpoint_id",
+          "session_id",
+          "job_id",
+          "author",
+          "mapping_profile",
+          "created_at"
+        ],
+        "title": "MappingCheckpointResponse",
+        "description": "Public-facing mapping checkpoint."
+      },
+      "MappingCheckpointRestoreRequest": {
+        "properties": {
+          "checkpoint_id": {
+            "type": "string",
+            "title": "Checkpoint Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "checkpoint_id"
+        ],
+        "title": "MappingCheckpointRestoreRequest",
+        "description": "Restore one existing checkpoint as the current mapping revision."
+      },
+      "MappingSessionCreateRequest": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "title": "MappingSessionCreateRequest",
+        "description": "Create a mapping refinement session for a completed job."
+      },
+      "MappingSessionDetailResponse": {
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/MappingSessionResponse"
+          },
+          "checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/MappingCheckpointResponse"
+            },
+            "type": "array",
+            "title": "Checkpoints"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session",
+          "checkpoints"
+        ],
+        "title": "MappingSessionDetailResponse",
+        "description": "Mapping session plus its checkpoint history."
+      },
+      "MappingSessionListResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/MappingSessionResponse"
+            },
+            "type": "array",
+            "title": "Sessions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessions"
+        ],
+        "title": "MappingSessionListResponse",
+        "description": "Wrapper for listing mapping sessions attached to a job."
+      },
+      "MappingSessionResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MappingSessionStatus"
+          },
+          "current_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Checkpoint Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "session_id",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MappingSessionResponse",
+        "description": "Public-facing mapping session snapshot."
+      },
+      "MappingSessionStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "archived",
+          "failed"
+        ],
+        "title": "MappingSessionStatus",
+        "description": "Lifecycle state for a checkpointed mapping refinement session."
+      },
+      "OrchestrationDecision": {
+        "type": "string",
+        "enum": [
+          "baseline_ok",
+          "rerun_with_profile",
+          "skeleton_only",
+          "retry_capture"
+        ],
+        "title": "OrchestrationDecision",
+        "description": "Decision emitted after adaptive pipeline orchestration evaluation."
+      },
+      "OrchestrationSnapshotResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrchestrationStatus"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "sandbox": {
+            "type": "string",
+            "title": "Sandbox"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrchestrationDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "json_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Json Path"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "capture_guidance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureGuidancePayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tuned_mapping_profile": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tuned Mapping Profile"
+          },
+          "evidence_manifest": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence Manifest"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "provider",
+          "sandbox"
+        ],
+        "title": "OrchestrationSnapshotResponse",
+        "description": "Public-facing orchestration snapshot returned to the client."
+      },
+      "OrchestrationStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "cancelled"
+        ],
+        "title": "OrchestrationStatus",
+        "description": "Lifecycle state for an orchestration evaluation run."
+      },
+      "PipelineStage": {
+        "type": "string",
+        "enum": [
+          "ingest",
+          "preprocess",
+          "pose",
+          "retarget",
+          "evaluate",
+          "package",
+          "finalize"
+        ],
+        "title": "PipelineStage",
+        "description": "Ordered processing phase within the video-to-dataset pipeline.\n\nStages run in fixed order: INGEST → PREPROCESS → POSE → RETARGET →\nEVALUATE → PACKAGE → FINALIZE. Each stage produces a well-defined output\nartifact consumed by the next stage.\n\nA Job's stage is independent of its overall JobStatus. A failed Job reports\nwhich stage it failed in; a completed Job records stage-level timing."
+      },
+      "ReviewListResponse": {
+        "properties": {
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewSnapshotResponse"
+            },
+            "type": "array",
+            "title": "Reviews"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reviews"
+        ],
+        "title": "ReviewListResponse",
+        "description": "Container for both stage reviews attached to one job."
+      },
+      "ReviewSnapshotResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "review_stage": {
+            "$ref": "#/components/schemas/ReviewStage"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReviewStatus"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "sandbox": {
+            "type": "string",
+            "title": "Sandbox"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "markdown_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markdown Path"
+          },
+          "json_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Json Path"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "context_manifest": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Context Manifest"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "review_stage",
+          "status",
+          "provider",
+          "sandbox"
+        ],
+        "title": "ReviewSnapshotResponse",
+        "description": "Public-facing stage review snapshot returned to the client."
+      },
+      "ReviewStage": {
+        "type": "string",
+        "enum": [
+          "pose",
+          "retarget"
+        ],
+        "title": "ReviewStage",
+        "description": "Bounded review stage attached to a completed pipeline job.\n\nPOSE reviews the extracted human skeleton outputs and decides whether the\npose-stage dataset is useful. RETARGET reviews the mapped robot-joint\nartifacts and decides whether the robot dataset is usable."
+      },
+      "ReviewStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed"
+        ],
+        "title": "ReviewStatus",
+        "description": "Lifecycle state for an asynchronous review sub-job."
+      },
+      "ReviewVerdict": {
+        "type": "string",
+        "enum": [
+          "approved",
+          "usable_skeleton_only",
+          "needs_review",
+          "rejected"
+        ],
+        "title": "ReviewVerdict",
+        "description": "Stage-level usability verdict emitted by review agents."
+      },
+      "SessionSummary": {
+        "properties": {
+          "judge_session_id": {
+            "type": "string",
+            "title": "Judge Session Id"
+          },
+          "total_jobs": {
+            "type": "integer",
+            "title": "Total Jobs"
+          },
+          "active_jobs": {
+            "type": "integer",
+            "title": "Active Jobs"
+          },
+          "completed_jobs": {
+            "type": "integer",
+            "title": "Completed Jobs"
+          },
+          "failed_jobs": {
+            "type": "integer",
+            "title": "Failed Jobs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "judge_session_id",
+          "total_jobs",
+          "active_jobs",
+          "completed_jobs",
+          "failed_jobs"
+        ],
+        "title": "SessionSummary",
+        "description": "Aggregated summary of all jobs owned by a single judge session."
+      },
+      "SessionSummaryListResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SessionSummary"
+            },
+            "type": "array",
+            "title": "Sessions"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessions",
+          "total"
+        ],
+        "title": "SessionSummaryListResponse",
+        "description": "Wrapper for listing session summaries (admin-only)."
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type",
+            "default": "bearer"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "default": ""
+          },
+          "judge_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judge Session Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token"
+        ],
+        "title": "TokenResponse",
+        "description": "JWT token returned on successful authentication.\n\nIncludes role and judge_session_id for frontend awareness so the UI can\ndisplay the caller's identity context without decoding the JWT itself."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "OrchestrationStatusPayload": {
+        "$defs": {
+          "OrchestrationStatus": {
+            "description": "Lifecycle state for an orchestration evaluation run.",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "OrchestrationStatus",
+            "type": "string"
+          }
+        },
+        "description": "Structured status event payload for orchestration SSE.",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/OrchestrationStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "OrchestrationStatusPayload",
+        "type": "object"
+      },
+      "OrchestrationProgressPayload": {
+        "description": "Structured progress event emitted while orchestration is running.",
+        "properties": {
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "heartbeat": {
+            "default": false,
+            "title": "Heartbeat",
+            "type": "boolean"
+          },
+          "elapsed_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Elapsed Seconds"
+          }
+        },
+        "required": [
+          "phase",
+          "message"
+        ],
+        "title": "OrchestrationProgressPayload",
+        "type": "object"
+      },
+      "OrchestrationResultPayload": {
+        "$defs": {
+          "CaptureGuidancePayload": {
+            "description": "Structured capture guidance returned for unsalvageable clips.",
+            "properties": {
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Reason"
+              },
+              "detection_rate": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Detection Rate"
+              },
+              "missing_landmark_ratio": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Missing Landmark Ratio"
+              },
+              "suggestions": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Suggestions",
+                "type": "array"
+              },
+              "risks": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Risks",
+                "type": "array"
+              }
+            },
+            "title": "CaptureGuidancePayload",
+            "type": "object"
+          },
+          "OrchestrationDecision": {
+            "description": "Decision emitted after adaptive pipeline orchestration evaluation.",
+            "enum": [
+              "baseline_ok",
+              "rerun_with_profile",
+              "skeleton_only",
+              "retry_capture"
+            ],
+            "title": "OrchestrationDecision",
+            "type": "string"
+          }
+        },
+        "description": "Normalized final decision payload emitted by orchestration.",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/OrchestrationDecision"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Confidence"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "risks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Risks",
+            "type": "array"
+          },
+          "tuned_mapping_profile": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tuned Mapping Profile"
+          },
+          "capture_guidance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureGuidancePayload"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "evidence_snapshot": {
+            "additionalProperties": true,
+            "title": "Evidence Snapshot",
+            "type": "object"
+          }
+        },
+        "required": [
+          "decision",
+          "summary"
+        ],
+        "title": "OrchestrationResultPayload",
+        "type": "object"
+      },
+      "OrchestrationDonePayload": {
+        "$defs": {
+          "OrchestrationStatus": {
+            "description": "Lifecycle state for an orchestration evaluation run.",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "OrchestrationStatus",
+            "type": "string"
+          }
+        },
+        "description": "Structured terminal event payload for orchestration SSE.",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/OrchestrationStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "OrchestrationDonePayload",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "type": "oauth2",
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "/api/auth/login"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 .PHONY: help lock sync fix format lint quality test check dev dev-up doctor \
         build docker-run docker-update docker-stop docker-logs docker-nuke \
         example-video prepare-real-video llm-probe \
-        frontend-install frontend-build frontend-rebuild demo
+        frontend-install frontend-api-types frontend-build frontend-rebuild demo
 
 CONTAINER_NAME := robodata
 IMAGE_NAME     := robodata:latest
@@ -14,7 +14,7 @@ REAL_VIDEO     := $(EXAMPLE_DIR)/real_capture_prepared.mp4
 FRONTEND_DIR   := frontend
 FRONTEND_OUT   := $(FRONTEND_DIR)/out
 FRONTEND_INDEX := $(FRONTEND_OUT)/index.html
-PKG_MANAGER    ?= $(shell command -v bun >/dev/null 2>&1 && echo bun || echo npm)
+PKG_MANAGER    ?= $(if $(wildcard $(FRONTEND_DIR)/package-lock.json),npm,$(shell command -v bun >/dev/null 2>&1 && echo bun || echo npm))
 
 help:  ## Print target descriptions
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -45,18 +45,10 @@ test:  ## Run full test suite
 
 check: fix quality test  ## Full verification: fix → lint → compile → test
 
-dev:  ## Start dev server (builds frontend on demand if frontend/out is missing)
-	@if [ ! -f "$(FRONTEND_INDEX)" ]; then \
-		echo "[make dev] $(FRONTEND_INDEX) not found — building frontend first..."; \
-		$(MAKE) frontend-build; \
-	fi
+dev: frontend-build  ## Start dev server after rebuilding frontend dependencies, generated API types, and static export
 	uv run uvicorn backend.server:app --host 0.0.0.0 --reload --port 8080
 
-dev-local:  ## Start dev server on localhost only (builds frontend on demand)
-	@if [ ! -f "$(FRONTEND_INDEX)" ]; then \
-		echo "[make dev-local] $(FRONTEND_INDEX) not found — building frontend first..."; \
-		$(MAKE) frontend-build; \
-	fi
+dev-local: frontend-build  ## Start localhost-only dev server after rebuilding frontend prerequisites
 	uv run uvicorn backend.server:app --host 127.0.0.1 --reload --port 8080
 
 dev-up:  ## Bootstrap dev environment from scratch
@@ -125,11 +117,20 @@ docker-nuke:  ## Stop, remove container AND delete local data volume
 
 # ── Frontend (Next.js → static export) ────────────────────────────────────────
 
-frontend-install:  ## Install frontend dependencies (bun if available, else npm)
+frontend-install:  ## Install frontend dependencies with lockfile-aware package manager behavior
 	@echo "Using package manager: $(PKG_MANAGER)"
-	cd $(FRONTEND_DIR) && $(PKG_MANAGER) install --frozen-lockfile
+	@if [ "$(PKG_MANAGER)" = "npm" ]; then \
+		cd $(FRONTEND_DIR) && npm ci; \
+	elif [ "$(PKG_MANAGER)" = "bun" ]; then \
+		cd $(FRONTEND_DIR) && bun install --frozen-lockfile; \
+	else \
+		cd $(FRONTEND_DIR) && $(PKG_MANAGER) install; \
+	fi
 
-frontend-build: frontend-install  ## Build the Next.js static export into frontend/out/
+frontend-api-types:  ## Generate frontend TypeScript API types from backend OpenAPI
+	cd $(FRONTEND_DIR) && $(PKG_MANAGER) run gen:api-types
+
+frontend-build: frontend-install frontend-api-types  ## Build the Next.js static export into frontend/out/
 	@echo "Building Next.js static export (package manager: $(PKG_MANAGER))..."
 	cd $(FRONTEND_DIR) && $(PKG_MANAGER) run build
 	@test -f "$(FRONTEND_INDEX)" || (echo "ERROR: $(FRONTEND_INDEX) not produced — build failed." && exit 1)

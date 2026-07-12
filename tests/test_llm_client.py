@@ -153,3 +153,26 @@ async def test_request_chat_json_falls_back_to_content_json(
     payload = await llm_client.request_chat_json(system_message="system", prompt="prompt")
 
     assert payload["summary"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_request_chat_json_salvages_first_object_when_provider_appends_extra_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structured JSON requests should salvage the first object from noisy provider output."""
+    monkeypatch.setattr(llm_client.settings, "llm_api_key", "probe-key")
+    monkeypatch.setattr(llm_client.settings, "llm_base_url", "https://provider.example")
+    monkeypatch.setattr(llm_client.settings, "llm_model_name", "provider-model")
+
+    noisy_payload = '{"decision":"baseline_ok","summary":"ok"}\n{"ignored":true}'
+    fake_client = _FakeClient(_FakeResponse(tool_arguments=noisy_payload))
+    monkeypatch.setattr(
+        llm_client,
+        "_build_async_openai_client",
+        lambda timeout_seconds=None: fake_client,
+    )
+
+    payload = await llm_client.request_chat_json(system_message="system", prompt="prompt")
+
+    assert payload["decision"] == "baseline_ok"
+    assert payload["summary"] == "ok"
