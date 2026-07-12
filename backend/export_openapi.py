@@ -17,6 +17,7 @@ from domain.orchestration import (
     OrchestrationProgressPayload,
     OrchestrationResultPayload,
     OrchestrationStatusPayload,
+    OrchestrationTracePayload,
 )
 
 
@@ -35,6 +36,7 @@ def main() -> None:
         OrchestrationProgressPayload,
         OrchestrationResultPayload,
         OrchestrationDonePayload,
+        OrchestrationTracePayload,
     ):
         schema_bucket[model.__name__] = model.model_json_schema(
             ref_template="#/components/schemas/{model}"

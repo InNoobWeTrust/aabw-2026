@@ -44,6 +44,7 @@ from domain.orchestration import (
     OrchestrationResultPayload,
     OrchestrationSnapshot,
     OrchestrationStatusPayload,
+    OrchestrationTracePayload,
 )
 
 __all__ = [
@@ -73,6 +74,7 @@ __all__ = [
     "OrchestrationSnapshot",
     "OrchestrationStatus",
     "OrchestrationStatusPayload",
+    "OrchestrationTracePayload",
     "PipelineStage",
     "QualityGrade",
     "SessionIdentity",

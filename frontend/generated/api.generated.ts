@@ -1323,6 +1323,35 @@ export interface components {
                 OrchestrationStatus: "pending" | "running" | "completed" | "failed" | "cancelled";
             };
         };
+        /**
+         * OrchestrationTracePayload
+         * @description Structured human-readable execution transcript entry.
+         *
+         *     This is intentionally limited to observable execution summaries and tool-like
+         *     actions. It must not contain hidden chain-of-thought.
+         */
+        OrchestrationTracePayload: {
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "system" | "ai" | "tool" | "decision";
+            /** Phase */
+            phase: string;
+            /** Title */
+            title: string;
+            /** Content */
+            content: string;
+            /**
+             * Tool Name
+             * @default null
+             */
+            tool_name: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
     };
     responses: never;
     parameters: never;

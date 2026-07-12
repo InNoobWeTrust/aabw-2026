@@ -10,6 +10,8 @@ export type OrchestrationProgressPayload =
   components["schemas"]["OrchestrationProgressPayload"];
 export type OrchestrationResultPayload =
   components["schemas"]["OrchestrationResultPayload"];
+export type OrchestrationTracePayload =
+  components["schemas"]["OrchestrationTracePayload"];
 export type CaptureGuidancePayload =
   components["schemas"]["CaptureGuidancePayload"];
 

@@ -2976,6 +2976,58 @@
         ],
         "title": "OrchestrationDonePayload",
         "type": "object"
+      },
+      "OrchestrationTracePayload": {
+        "description": "Structured human-readable execution transcript entry.\n\nThis is intentionally limited to observable execution summaries and tool-like\nactions. It must not contain hidden chain-of-thought.",
+        "properties": {
+          "role": {
+            "enum": [
+              "system",
+              "ai",
+              "tool",
+              "decision"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Name"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          }
+        },
+        "required": [
+          "role",
+          "phase",
+          "title",
+          "content"
+        ],
+        "title": "OrchestrationTracePayload",
+        "type": "object"
       }
     },
     "securitySchemes": {

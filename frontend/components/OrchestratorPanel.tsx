@@ -10,6 +10,7 @@ import {
   Play,
   RotateCcw,
   Save,
+  Wrench,
 } from "lucide-react";
 
 import {
@@ -19,6 +20,7 @@ import {
   OrchestrationSnapshotResponse,
   OrchestrationStatusPayload,
   OrchestrationTokenPayload,
+  OrchestrationTracePayload,
 } from "../generated/orchestration";
 
 type OrchestrationUiSnapshot = Omit<
@@ -28,6 +30,18 @@ type OrchestrationUiSnapshot = Omit<
   provider?: OrchestrationSnapshotResponse["provider"];
   sandbox?: OrchestrationSnapshotResponse["sandbox"];
 };
+
+type TraceRole = "system" | "ai" | "tool" | "decision";
+
+interface TraceEntry {
+  role: TraceRole;
+  phase: string;
+  title: string;
+  content: string;
+  tool_name?: string | null;
+  metadata?: Record<string, unknown>;
+  heartbeat?: boolean;
+}
 
 interface MappingCheckpoint {
   checkpoint_id: string;
@@ -72,13 +86,13 @@ export default function OrchestratorPanel({
   const [isRunning, setIsRunning] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
-  const [progressLog, setProgressLog] = useState<string[]>([]);
+  const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([]);
   const [draftSummary, setDraftSummary] = useState("");
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
-    setProgressLog([]);
+    setTraceEntries([]);
     setDraftSummary("");
     closeStream();
     void fetchSnapshot();
@@ -116,16 +130,26 @@ export default function OrchestratorPanel({
     }
   };
 
-  const appendProgress = (message: string) => {
-    const trimmed = message.trim();
-    if (!trimmed) {
+  const appendTrace = (entry: TraceEntry) => {
+    const normalized: TraceEntry = {
+      ...entry,
+      content: entry.content.trim(),
+    };
+    if (!normalized.content) {
       return;
     }
-    setProgressLog((previous) => {
-      if (previous[previous.length - 1] === trimmed) {
+    setTraceEntries((previous) => {
+      const last = previous[previous.length - 1];
+      if (
+        last &&
+        last.role === normalized.role &&
+        last.phase === normalized.phase &&
+        last.title === normalized.title &&
+        last.content === normalized.content
+      ) {
         return previous;
       }
-      return [...previous.slice(-29), trimmed];
+      return [...previous.slice(-29), normalized];
     });
   };
 
@@ -162,7 +186,15 @@ export default function OrchestratorPanel({
     source.addEventListener("progress", (event) => {
       try {
         const payload = JSON.parse(event.data) as OrchestrationProgressPayload;
-        appendProgress(payload.message || "Orchestration is making progress.");
+        if (payload.heartbeat) {
+          appendTrace({
+            role: "system",
+            phase: payload.phase || "running",
+            title: "Heartbeat",
+            content: payload.message || "Orchestration is still running.",
+            heartbeat: true,
+          });
+        }
         if (payload.phase) {
           setSnapshot((previous) => {
             if (!previous) {
@@ -182,7 +214,12 @@ export default function OrchestratorPanel({
           });
         }
       } catch {
-        appendProgress("Received malformed orchestration progress event.");
+        appendTrace({
+          role: "system",
+          phase: "error",
+          title: "Malformed progress event",
+          content: "Received an orchestration progress event that could not be parsed.",
+        });
       }
     });
 
@@ -195,9 +232,30 @@ export default function OrchestratorPanel({
       }
     });
 
+    source.addEventListener("trace", (event) => {
+      try {
+        const payload = JSON.parse(event.data) as OrchestrationTracePayload;
+        appendTrace({
+          role: payload.role,
+          phase: payload.phase,
+          title: payload.title,
+          content: payload.content,
+          tool_name: payload.tool_name,
+          metadata: payload.metadata,
+        });
+      } catch {
+        appendTrace({
+          role: "system",
+          phase: "error",
+          title: "Malformed trace event",
+          content: "Received an orchestration trace event that could not be parsed.",
+        });
+      }
+    });
+
     source.addEventListener("result", (event) => {
       try {
-        const payload = JSON.parse(event.data);
+        const payload = JSON.parse(event.data) as OrchestrationResultPayload;
         setSnapshot((previous) => ({
           ...(previous || { job_id: jobId, status: "completed", metadata: {} }),
           status: "completed",
@@ -215,12 +273,22 @@ export default function OrchestratorPanel({
           setDraftSummary(String(payload.summary));
         }
       } catch {
-        appendProgress("Received malformed orchestration result event.");
+        appendTrace({
+          role: "system",
+          phase: "error",
+          title: "Malformed result event",
+          content: "Received an orchestration result event that could not be parsed.",
+        });
       }
     });
 
     source.addEventListener("error", () => {
-      appendProgress("Waiting for orchestration stream to continue...");
+      appendTrace({
+        role: "system",
+        phase: String(snapshot?.metadata?.current_phase || "running"),
+        title: "Stream reconnecting",
+        content: "Waiting for orchestration stream to continue...",
+      });
     });
 
     source.addEventListener("done", (event) => {
@@ -353,7 +421,7 @@ export default function OrchestratorPanel({
 
   const handleRun = async () => {
     setIsRunning(true);
-    setProgressLog([]);
+    setTraceEntries([]);
     setDraftSummary("");
     try {
       const res = await fetch(`/api/jobs/${jobId}/orchestration/run`, {
@@ -362,7 +430,12 @@ export default function OrchestratorPanel({
       });
       if (res.ok) {
         const data = (await res.json()) as OrchestrationSnapshotResponse;
-        appendProgress("Orchestration request accepted. Waiting for live progress...");
+        appendTrace({
+          role: "system",
+          phase: "starting",
+          title: "Run accepted",
+          content: "Orchestration request accepted. Waiting for live progress...",
+        });
         setSnapshot(data);
         if (!eventSourceRef.current) {
           startSseStream();
@@ -596,16 +669,54 @@ export default function OrchestratorPanel({
             Live Execution Trace
           </h4>
           <span className="text-[10px] text-slate-500">
-            {progressLog.length} event{progressLog.length === 1 ? "" : "s"}
+            {traceEntries.length} event{traceEntries.length === 1 ? "" : "s"}
           </span>
         </div>
-        {progressLog.length ? (
-          <ul className="flex max-h-48 flex-col gap-2 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-300">
-            {progressLog.map((message, index) => (
-              <li key={`orchestration-progress-${index}`} className="leading-relaxed">
-                {message}
-              </li>
-            ))}
+        {traceEntries.length ? (
+          <ul className="flex max-h-64 flex-col gap-2 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-300">
+            {traceEntries.map((entry, index) => {
+              const Icon =
+                entry.role === "ai"
+                  ? Bot
+                  : entry.role === "tool"
+                    ? Wrench
+                    : entry.role === "decision"
+                      ? Check
+                      : AlertCircle;
+              const badgeClass =
+                entry.role === "ai"
+                  ? "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200"
+                  : entry.role === "tool"
+                    ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-200"
+                    : entry.role === "decision"
+                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                      : "border-slate-700 bg-slate-900 text-slate-300";
+
+              return (
+                <li
+                  key={`orchestration-trace-${index}`}
+                  className={`rounded-lg border p-3 ${entry.heartbeat ? "opacity-70" : ""} ${badgeClass}`}
+                >
+                  <div className="flex items-start gap-2">
+                    <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide">
+                          {entry.role} · {entry.phase}
+                        </span>
+                        <span className="text-[11px] font-semibold">{entry.title}</span>
+                        {entry.tool_name ? (
+                          <span className="rounded border border-current/20 px-1.5 py-0.5 text-[10px] opacity-80">
+                            {entry.tool_name}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 leading-relaxed text-current/90">{entry.content}</p>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="text-xs italic text-slate-500">

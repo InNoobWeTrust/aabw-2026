@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +51,21 @@ class OrchestrationDonePayload(BaseModel):
     """Structured terminal event payload for orchestration SSE."""
 
     status: OrchestrationStatus
+
+
+class OrchestrationTracePayload(BaseModel):
+    """Structured human-readable execution transcript entry.
+
+    This is intentionally limited to observable execution summaries and tool-like
+    actions. It must not contain hidden chain-of-thought.
+    """
+
+    role: Literal["system", "ai", "tool", "decision"]
+    phase: str
+    title: str
+    content: str
+    tool_name: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class OrchestrationSnapshot(BaseModel):

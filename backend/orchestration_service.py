@@ -29,6 +29,7 @@ from domain.orchestration import (
     OrchestrationProgressPayload,
     OrchestrationResultPayload,
     OrchestrationStatusPayload,
+    OrchestrationTracePayload,
 )
 
 _logger = logging.getLogger(__name__)
@@ -87,6 +88,29 @@ class OrchestrationService:
             },
         )
         self._emit(job_id, "status", OrchestrationStatusPayload(status=OrchestrationStatus.RUNNING))
+        self._emit_trace(
+            job_id,
+            role="system",
+            phase="starting",
+            title="Orchestrator started",
+            content=(
+                f"Execution mode: {settings.review_execution_mode}. "
+                f"Model: {settings.review_model_name}."
+            ),
+            metadata={"provider": settings.review_provider_name},
+        )
+        self._emit_trace(
+            job_id,
+            role="tool",
+            phase="starting",
+            title="Evidence pack ready",
+            content=(
+                "Loaded compact pose, retarget, review, and calibration evidence "
+                "for evaluation."
+            ),
+            tool_name="build_evidence_manifest",
+            metadata={"job_id": job_id},
+        )
         self._emit_progress(
             job_id,
             phase_state,
@@ -107,6 +131,21 @@ class OrchestrationService:
                         "This may take a while when the model is thinking."
                     ),
                 )
+                self._emit_trace(
+                    job_id,
+                    role="tool",
+                    phase="external_request",
+                    title="LLM request dispatched",
+                    content=(
+                        "Submitted the orchestration prompt and evidence pack to "
+                        "the configured provider."
+                    ),
+                    tool_name="request_chat_json",
+                    metadata={
+                        "provider": settings.review_provider_name,
+                        "model": settings.review_model_name,
+                    },
+                )
                 try:
                     raw_payload = await self._run_external_orchestration(job_id, evidence_manifest)
                     payload = _normalize_orchestration_result_payload(raw_payload)
@@ -115,6 +154,18 @@ class OrchestrationService:
                         phase_state,
                         phase="external_response",
                         message="Received structured decision payload from external orchestrator.",
+                    )
+                    self._emit_trace(
+                        job_id,
+                        role="ai",
+                        phase="external_response",
+                        title="AI assessment received",
+                        content=(
+                            f"Provider returned decision '{payload.decision.value}' "
+                            "with confidence "
+                            f"{payload.confidence if payload.confidence is not None else 'n/a'}."
+                        ),
+                        metadata={"risk_count": len(payload.risks)},
                     )
                 except Exception as exc:
                     _logger.warning(
@@ -132,6 +183,17 @@ class OrchestrationService:
                             "Falling back to local heuristic reasoning."
                         ),
                     )
+                    self._emit_trace(
+                        job_id,
+                        role="system",
+                        phase="fallback_local",
+                        title="Fallback engaged",
+                        content=(
+                            "External provider output could not be used, so "
+                            "deterministic local orchestration will finish the job."
+                        ),
+                        metadata={"error": str(exc)},
+                    )
                     raw_payload = await asyncio.to_thread(orchestration_factory)
                     payload = _normalize_orchestration_result_payload(raw_payload)
             else:
@@ -140,6 +202,17 @@ class OrchestrationService:
                     phase_state,
                     phase="local_heuristic",
                     message="Running deterministic local orchestration heuristic.",
+                )
+                self._emit_trace(
+                    job_id,
+                    role="tool",
+                    phase="local_heuristic",
+                    title="Local heuristic running",
+                    content=(
+                        "Evaluating evidence with deterministic orchestration "
+                        "rules instead of an external model."
+                    ),
+                    tool_name="build_orchestration_factory",
                 )
                 raw_payload = await asyncio.to_thread(orchestration_factory)
                 payload = _normalize_orchestration_result_payload(raw_payload)
@@ -154,6 +227,14 @@ class OrchestrationService:
                 phase_state,
                 phase="persisting",
                 message="Persisting orchestration decision and capture guidance artifacts.",
+            )
+            self._emit_trace(
+                job_id,
+                role="tool",
+                phase="persisting",
+                title="Persisting artifacts",
+                content="Writing decision payload and any capture guidance to the job output tree.",
+                tool_name="FileSystemOrchestrationStore",
             )
             decision_payload = payload.model_dump(mode="json")
             decision_path = self._orchestration_store.write_decision_payload(
@@ -192,6 +273,18 @@ class OrchestrationService:
                 phase="completed",
                 message="Orchestration completed and final decision is now available.",
             )
+            self._emit_trace(
+                job_id,
+                role="decision",
+                phase="completed",
+                title="Decision recorded",
+                content=payload.summary,
+                metadata={
+                    "decision": payload.decision.value,
+                    "confidence": payload.confidence,
+                    "risk_count": len(payload.risks),
+                },
+            )
             self._emit(job_id, "result", payload)
             self._emit(
                 job_id,
@@ -216,6 +309,14 @@ class OrchestrationService:
                 phase_state,
                 phase="failed",
                 message=f"Orchestration failed: {exc}",
+            )
+            self._emit_trace(
+                job_id,
+                role="system",
+                phase="failed",
+                title="Run failed",
+                content="The orchestration run terminated with an error.",
+                metadata={"error": str(exc)},
             )
             self._emit(job_id, "error", {"detail": str(exc)})
             self._emit(
@@ -250,7 +351,8 @@ class OrchestrationService:
         | OrchestrationResultPayload
         | OrchestrationDonePayload
         | OrchestrationStatusPayload
-        | OrchestrationProgressPayload,
+        | OrchestrationProgressPayload
+        | OrchestrationTracePayload,
     ) -> None:
         if hasattr(payload, "model_dump"):
             encoded_payload = payload.model_dump(mode="json")
@@ -283,6 +385,31 @@ class OrchestrationService:
             job_id,
             "progress",
             OrchestrationProgressPayload(phase=phase, message=message),
+        )
+
+    def _emit_trace(
+        self,
+        job_id: str,
+        *,
+        role: str,
+        phase: str,
+        title: str,
+        content: str,
+        tool_name: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a structured transcript event safe for user-visible execution tracing."""
+        self._emit(
+            job_id,
+            "trace",
+            OrchestrationTracePayload(
+                role=role,
+                phase=phase,
+                title=title,
+                content=content,
+                tool_name=tool_name,
+                metadata=metadata or {},
+            ),
         )
 
     async def _heartbeat_progress(

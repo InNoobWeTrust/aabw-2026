@@ -67,9 +67,17 @@ def create_app() -> FastAPI:
         path = request.url.path
         if path.startswith("/api") or "." in path.split("/")[-1]:
             return JSONResponse(status_code=404, content={"detail": "Not found"})
-        return FileResponse(str(frontend_index))
+        if frontend_index.exists():
+            return FileResponse(str(frontend_index))
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Frontend bundle not built yet"},
+        )
 
-    app.mount("/", SPAStaticFiles(directory=str(frontend_out), html=False), name="frontend")
+    if frontend_out.exists():
+        app.mount("/", SPAStaticFiles(directory=str(frontend_out), html=False), name="frontend")
+    else:
+        _logger.warning("Frontend bundle directory %s is missing; skipping static mount", frontend_out)
 
     return app
 
